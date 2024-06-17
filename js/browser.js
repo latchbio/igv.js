@@ -91,16 +91,21 @@ class Browser {
         this.namespace = '.browser_' + this.guid
 
         this.parent = parentDiv
-        if(!this.shadowRoot) {
+
+        if (this.parent.shadowRoot == null) {
+            Browser.shadowRoot = undefined;
+        }
+
+        if(Browser.shadowRoot == null) {
             // Only attach the shadow dom once.  We can attach multiple browsers to the shadow root
-            this.shadowRoot = parentDiv.attachShadow({mode: "open"})
+            Browser.shadowRoot = parentDiv.attachShadow({mode: "open"})
             const sheet = new CSSStyleSheet()
             sheet.replaceSync(igvCss)
-            this.shadowRoot.adoptedStyleSheets = [sheet]
+            Browser.shadowRoot.adoptedStyleSheets = [sheet]
         }
 
         this.root = DOMUtils.div({class: 'igv-container'})
-        this.shadowRoot.appendChild(this.root)
+        Browser.shadowRoot.appendChild(this.root)
 
         // spinner
         this.spinner = DOMUtils.div({class: 'igv-loading-spinner-container'})
