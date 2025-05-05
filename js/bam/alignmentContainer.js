@@ -43,14 +43,20 @@ const alignmentSpace = 2
  */
 class AlignmentContainer {
 
+    #unpacked = []
+    baseModificationKeys = new Set()
+
     constructor(chr, start, end,
                 {
                     samplingWindowSize,
                     samplingDepth,
                     alleleFreqThreshold,
-                    colorBy,
-                    filter
+                    colorBy
                 }) {
+
+        this.alleleFreqThreshold = alleleFreqThreshold === undefined ? 0.2 : alleleFreqThreshold
+        this.samplingWindowSize = samplingWindowSize || 100
+        this.samplingDepth = samplingDepth || 1000
 
         this.chr = chr
         this.start = Math.floor(start)
@@ -59,13 +65,6 @@ class AlignmentContainer {
         this.coverageMap = new CoverageMap(chr, start, end, this.alleleFreqThreshold)
         this.downsampledIntervals = []
 
-        this.alleleFreqThreshold = alleleFreqThreshold === undefined ? 0.2 : alleleFreqThreshold
-        this.samplingWindowSize = samplingWindowSize || 100
-        this.samplingDepth = samplingDepth || 1000
-
-        this.filter = filter || ((alignment) => {
-            return alignment.isMapped() && !alignment.isFailsVendorQualityCheck()
-        })
 
         // Enable basemods
         if (colorBy && colorBy.startsWith("basemod")) {
@@ -81,7 +80,7 @@ class AlignmentContainer {
         this.hasPairs = false // until proven otherwise
     }
 
-    pack({viewAsPairs, showSoftClips, expectedPairOrientation, groupBy}) {
+    pack({viewAsPairs, showSoftClips, expectedPairOrientation, groupBy, displayMode}) {
 
         let alignments = this.allAlignments()
         if (viewAsPairs) {
@@ -89,19 +88,127 @@ class AlignmentContainer {
         } else {
             alignments = unpairAlignments(alignments)
         }
-        this.packedGroups = packAlignmentRows(alignments, showSoftClips, expectedPairOrientation, groupBy)
+        this.packAlignmentRows(alignments, showSoftClips, expectedPairOrientation, groupBy, displayMode)
         if (this.alignments) {
             delete this.alignments
         }
     }
 
+    packAlignmentRows(alignments, showSoftClips, expectedPairOrientation, groupBy, displayMode) {
+
+        this.#unpacked = []
+
+        /**
+         * Pack alignments densely, filling each row before proceeding to the next.  This is the packing code for
+         * all display modes other than "FULL"
+         *
+         * @param groupedAlignments
+         * @param groupName
+         * @param packed
+         */
+        const packDense = (alignments, groupName) => {
+
+            alignments.sort(function (a, b) {
+                return showSoftClips ? a.scStart - b.scStart : a.start - b.start
+            })
+
+            const group = new Group(groupName)
+            let alignmentRow
+            let nextStart = 0
+            let nextIDX = 0
+            const allocated = new Set()
+            const startNewRow = () => {
+                alignmentRow = new BamAlignmentRow()
+                group.push(alignmentRow)
+                nextStart = 0
+                nextIDX = 0
+                allocated.clear()
+            }
+            startNewRow()
+
+            while (alignments.length > 0) {
+                if (nextIDX >= 0 && nextIDX < alignments.length) {
+                    const alignment = alignments[nextIDX]
+                    allocated.add(alignment)
+                    alignmentRow.alignments.push(alignment)
+                    nextStart = showSoftClips ?
+                        alignment.scStart + alignment.scLengthOnRef + alignmentSpace :
+                        alignment.start + alignment.lengthOnRef + alignmentSpace
+                    nextIDX = binarySearch(alignments, (a) => (showSoftClips ? a.scStart : a.start) > nextStart, nextIDX)
+                } else {
+                    // Remove allocated alignments and start new row
+                    alignments = alignments.filter(a => !allocated.has(a))
+                    startNewRow()
+                }
+            }
+            return group
+        }
+
+        const packFull = (alignments, groupName) => {
+
+            alignments.sort(function (a, b) {
+                return a.start - b.start
+            })
+            const group = new Group(groupName)
+            const {start, end} = this.viewport.genomicRange()
+            for (let a of alignments) {
+                if (a.end < start || a.start > end) {
+                    this.#unpacked.push(a)
+                } else {
+                    const alignmentRow = new BamAlignmentRow()
+                    alignmentRow.alignments.push(a)
+                    group.push(alignmentRow)
+                }
+            }
+            return group
+        }
+
+
+        if (!alignments || alignments.length === 0) {
+            return new Map()
+        } else {
+
+            // Separate alignments into groups
+            const groupedAlignments = new Map()
+            if (groupBy) {
+                for (let a of alignments) {
+                    const group = getGroupValue(a, groupBy, expectedPairOrientation) || ""
+                    if (!groupedAlignments.has(group)) {
+                        groupedAlignments.set(group, [])
+                    }
+                    groupedAlignments.get(group).push(a)
+                }
+            } else {
+                groupedAlignments.set("", alignments)
+            }
+
+            const packed = new Map()
+            const orderedGroupNames = Array.from(groupedAlignments.keys()).sort(getGroupComparator(groupBy, expectedPairOrientation))
+            for (let groupName of orderedGroupNames) {
+                const alignments = groupedAlignments.get(groupName)
+                const group = "FULL" === displayMode ?
+                    packFull(alignments, groupName) :
+                    packDense(alignments, groupName)
+                packed.set(groupName, group)
+            }
+
+            this.packedGroups = packed
+        }
+    }
+
+
     push(alignment) {
 
         this.hasPairs = this.hasPairs || alignment.isPaired()
 
-        if (this.filter(alignment) === false) return
-
         this.coverageMap.incCounts(alignment)   // Count coverage before any downsampling
+
+        const baseModificationSets = alignment.getBaseModificationSets()
+        if(baseModificationSets) {
+            for(let bms of baseModificationSets) {
+                this.baseModificationKeys.add(bms.key)
+            }
+        }
 
         if (this.baseModCounts) {
             this.baseModCounts.incrementCounts(alignment)
@@ -166,8 +273,16 @@ class AlignmentContainer {
     allAlignments() {
         if (this.alignments) {
             return this.alignments
+        } else if (this.packedGroups) {
+            const all = Array.from(this.packedGroups.values()).flatMap(group => group.rows.flatMap(row => row.alignments))
+            if (this.#unpacked && this.#unpacked.length > 0) {
+                for (let a of this.#unpacked) {
+                    all.push(a)
+                }
+            }
+            return all
         } else {
-            return Array.from(this.packedGroups.values()).flatMap(group => group.rows.flatMap(row => row.alignments))
+            return []
         }
     }
 
@@ -176,9 +291,10 @@ class AlignmentContainer {
     }
 
     sortRows(options) {
-
-        for (let group of this.packedGroups.values()) {
-            group.sortRows(options, this)
+        if(this.packedGroups) {
+            for (let group of this.packedGroups.values()) {
+                group.sortRows(options, this)
+            }
         }
     }
 }
@@ -588,72 +704,6 @@ function unpairAlignments(alignments) {
         [alignment])
 }
 
-function packAlignmentRows(alignments, showSoftClips, expectedPairOrientation, groupBy) {
-
-    if (!alignments || alignments.length === 0) {
-        return new Map()
-    } else {
-
-        // Separate alignments into groups
-        const groupedAlignments = new Map()
-        if (groupBy) {
-            for (let a of alignments) {
-                const group = getGroupValue(a, groupBy, expectedPairOrientation) || ""
-                if (!groupedAlignments.has(group)) {
-                    groupedAlignments.set(group, [])
-                }
-                groupedAlignments.get(group).push(a)
-            }
-        } else {
-            groupedAlignments.set("", alignments)
-        }
-
-        const packed = new Map()
-        const orderedGroupNames = Array.from(groupedAlignments.keys()).sort(getGroupComparator(groupBy, expectedPairOrientation))
-        for (let groupName of orderedGroupNames) {
-
-            let alignments = groupedAlignments.get(groupName)
-
-            alignments.sort(function (a, b) {
-                return showSoftClips ? a.scStart - b.scStart : a.start - b.start
-            })
-
-            const group = new Group(groupName)
-            packed.set(groupName, group)
-            let alignmentRow
-            let nextStart = 0
-            let nextIDX = 0
-            const allocated = new Set()
-            const startNewRow = () => {
-                alignmentRow = new BamAlignmentRow()
-                group.push(alignmentRow)
-                nextStart = 0
-                nextIDX = 0
-                allocated.clear()
-            }
-            startNewRow()
-
-            while (alignments.length > 0) {
-                if (nextIDX >= 0 && nextIDX < alignments.length) {
-                    const alignment = alignments[nextIDX]
-                    allocated.add(alignment)
-                    alignmentRow.alignments.push(alignment)
-                    nextStart = showSoftClips ?
-                        alignment.scStart + alignment.scLengthOnRef + alignmentSpace :
-                        alignment.start + alignment.lengthOnRef + alignmentSpace
-                    nextIDX = binarySearch(alignments, (a) => (showSoftClips ? a.scStart : a.start) > nextStart, nextIDX)
-                } else {
-                    // Remove allocated alignments and start new row
-                    alignments = alignments.filter(a => !allocated.has(a))
-                    startNewRow()
-                }
-            }
-        }
-        //console.log(`Done in ${Date.now() - t0} ms`)
-        return packed
-    }
-}
-
 /**
  * Return 0 <= i <= array.length such that !pred(array[i - 1]) && pred(array[i]).
  *
@@ -718,7 +768,6 @@ function getGroupValue(al, groupBy, expectedPairOrientation) {
         // Add cases for other options as needed
         case 'base':
 
-            // Use a string prefix to enforce grouping rules:
             //    1: alignments with a base at the position
             //    2: alignments with a gap at the position
             //    3: alignment that do not overlap the position (or are on a different chromosome)
@@ -746,6 +795,9 @@ function getGroupComparator(groupName, expectedPairOrientation) {
     switch (groupName) {
         case "pairOrientation":
             return pairOrientationComparator(expectedPairOrientation)
+        case 'strand':
+        case 'firstOfPairStrand':
+            return groupStrandComparator
         default:
             return groupName && groupName.startsWith("base:") ?
                 baseComparator :
@@ -760,6 +812,16 @@ function baseComparator(o1, o2) {
         return baseRank.get(o1) - baseRank.get(o2)
     } else {
         return o1.localeCompare(o2, undefined, {sensitivity: 'base'})
+    }
+}
+
+function groupStrandComparator(o1, o2) {
+    if (o1 === o2) {
+        return 0
+    } else if (o1 && o2) {
+        return -o1.localeCompare(o2)
+    } else {
+        return o1 ? 1 : -1
     }
 }
 

@@ -24,12 +24,9 @@
  */
 
 import {isSimpleType} from "./util/igvUtils.js"
-import {FeatureUtils, FileUtils, StringUtils} from "../node_modules/igv-utils/src/index.js"
-import {getMultiSelectedTrackViews, isMultiSelectedTrackView} from "./ui/menuUtils.js"
-import $ from "./vendor/jquery-3.3.1.slim.js"
+import {FileUtils, StringUtils, FeatureUtils} from "../node_modules/igv-utils/src/index.js"
 import {createCheckbox} from "./igv-icons.js"
-
-const DEFAULT_COLOR = 'rgb(150,150,150)'
+import {findFeatureAfterCenter} from "./feature/featureUtils.js"
 
 const fixColor = (colorString) => {
     if (StringUtils.isString(colorString)) {
@@ -49,13 +46,16 @@ const fixColor = (colorString) => {
  */
 class TrackBase {
 
+    static defaultColor = 'rgb(150,150,150)'
+
     static defaults = {
         height: 50,
         autoHeight: false,
         visibilityWindow: undefined,   // Identifies property that should be copied from config
         color: undefined,  // Identifies property that should be copied from config
         altColor: undefined,  // Identifies property that should be copied from config
-        supportHiDPI: true
+        supportHiDPI: true,
+        selected: false
     }
 
     constructor(config, browser) {
@@ -77,19 +77,25 @@ class TrackBase {
             config.displayMode = config.displayMode.toUpperCase()
         }
 
-        // Set default properties
+        // Base default settings
         const defaults = Object.assign({}, TrackBase.defaults)
-        if(this.constructor.defaults) {
-            for(let key of Object.keys(this.constructor.defaults)) {
+
+        // Overide with class specific default settings
+        if (this.constructor.defaults) {
+            for (let key of Object.keys(this.constructor.defaults)) {
                 defaults[key] = this.constructor.defaults[key]
             }
         }
-        for(let key of Object.keys(defaults)) {
+
+        for (let key of Object.keys(defaults)) {
             this[key] = config.hasOwnProperty(key) ? config[key] : defaults[key]
-            if(key === 'color' || key === 'altColor') {
+            if ((key === 'color' || key === 'altColor') && this[key]) {
                 this[key] = fixColor(this[key])
             }
         }
+
+        // this._initialColor = this.color || this.constructor.defaultColor
+        // this._initialAltColor = this.altColor || this.constructor.defaultColor
 
         if (config.name || config.label) {
             this.name = config.name || config.label
@@ -100,15 +106,13 @@ class TrackBase {
         }
 
         this.url = config.url
-        if(this.config.type) this.type = this.config.type
+        if (this.config.type) this.type = this.config.type
         this.id = this.config.id === undefined ? this.name : this.config.id
         this.order = config.order
         this.autoscaleGroup = config.autoscaleGroup
         this.removable = config.removable === undefined ? true : config.removable      // Defaults to true
         this.minHeight = config.minHeight || Math.min(25, this.height)
         this.maxHeight = config.maxHeight || Math.max(1000, this.height)
-
-        this.isMultiSelection = config.isMultiSelection || false
 
         if (config.onclick) {
             this.onclick = config.onclick
@@ -131,6 +135,13 @@ class TrackBase {
         } else if (typeof this.config.hoverText === 'function') {
             this.hoverText = this.config.hoverText
         }
+    }
+
+    async postInit() {
+
+        this._initialColor = this.color || this.constructor.defaultColor
+        this._initialAltColor = this.altColor || this.constructor.defaultColor
+        return this
     }
 
     get name() {
@@ -158,7 +169,7 @@ class TrackBase {
 
     repaintViews() {
         if (this.trackView) {
-            this.trackView.repaintViews();
+            this.trackView.repaintViews()
         }
     }
 
@@ -288,7 +299,7 @@ class TrackBase {
                     }
                     break
                 case "viewlimits":
-                    if (!this.config.autoscale) {   // autoscale in the config has precedence
+                    if (!this.config.autoscale && !this.config.max) {   //config has precedence
                         tokens = properties[key].split(":")
                         let min = 0
                         let max
@@ -298,8 +309,8 @@ class TrackBase {
                             min = Number(tokens[0])
                             max = Number(tokens[1])
                         }
-                        if(Number.isNaN(max) || Number.isNaN(min)) {
-                         console.warn(`Unexpected viewLimits value in track line: ${properties["viewLimits"]}`)
+                        if (Number.isNaN(max) || Number.isNaN(min)) {
+                            console.warn(`Unexpected viewLimits value in track line: ${properties["viewLimits"]}`)
                         } else {
                             tracklineConfg.autoscale = false
                             tracklineConfg.dataRange = {min, max}
@@ -518,46 +529,78 @@ class TrackBase {
 
         const menuItems = []
 
-        menuItems.push('<hr/>')
+        // Data range or color scale
 
-        // Data range
-        let object = $('<div>')
-        object.text('Set data range')
+        if ("heatmap" !== this.graphType) {
 
-        function dialogPresentationHandler() {
+            menuItems.push('<hr/>')
 
-            if (isMultiSelectedTrackView(this.trackView)) {
-                this.browser.dataRangeDialog.configure(getMultiSelectedTrackViews(this.trackView.browser))
-            } else {
-                this.browser.dataRangeDialog.configure(this.trackView)
-            }
-            this.browser.dataRangeDialog.present($(this.browser.columnContainer))
-        }
-        menuItems.push({ object, dialog:dialogPresentationHandler })
+            function dialogPresentationHandler(e) {
 
-        if (this.logScale !== undefined) {
-
-            object = $(createCheckbox("Log scale", this.logScale))
-
-            function logScaleHandler() {
-                this.logScale = !this.logScale
-                this.trackView.repaintViews()
+                if (this.trackView.track.selected) {
+                    this.browser.dataRangeDialog.configure(this.trackView.browser.getSelectedTrackViews())
+                } else {
+                    this.browser.dataRangeDialog.configure(this.trackView)
+                }
+                this.browser.dataRangeDialog.present(e)
             }
 
-            menuItems.push({ object, click:logScaleHandler })
+            menuItems.push({label: 'Set data range', dialog: dialogPresentationHandler})
+
+            if (this.logScale !== undefined) {
+
+                function logScaleHandler() {
+                    this.logScale = !this.logScale
+                    this.trackView.repaintViews()
+                }
+
+                menuItems.push({element: createCheckbox("Log scale", this.logScale), click: logScaleHandler})
+            }
+
+            function autoScaleHandler() {
+                this.autoscaleGroup = undefined
+                this.autoscale = !this.autoscale
+                this.browser.updateViews()
+            }
+
+            menuItems.push({element: createCheckbox("Autoscale", this.autoscale), click: autoScaleHandler})
         }
-
-        object = $(createCheckbox("Autoscale", this.autoscale))
-
-        function autoScaleHandler() {
-            this.autoscaleGroup = undefined
-            this.autoscale = !this.autoscale
-            this.browser.updateViews()
-        }
-
-        menuItems.push({ object, click:autoScaleHandler })
 
         return menuItems
+    }
+
+    setDataRange({min, max}) {
+
+        this.dataRange = {min, max}
+        this.autoscale = false
+        this.autoscaleGroup = undefined
+        this.trackView.repaintViews()
+    }
+
+    /**
+     * Return the first feature in this track whose start position is > position
+     * @param chr
+     * @param position
+     * @param direction
+     * @returns {Promise<void>}
+     */
+    async nextFeatureAfter(chr, position, direction) {
+        const viewport = this.trackView.viewports[0]
+        let features = viewport.cachedFeatures
+        if (features && Array.isArray(features) && features.length > 0) {
+            // Check chromosome, all cached features will share a chromosome
+            const chrName = this.browser.genome.getChromosomeName(features[0].chr)
+            if (chrName === chr) {
+                const next = findFeatureAfterCenter(features, position, direction)
+                if (next) {
+                    return next
+                }
+            }
+        }
+
+        if (typeof this.featureSource.nextFeature === 'function') {
+            return this.featureSource.nextFeature(chr, position, direction, this.visibilityWindow)
+        }
     }
 
     /**
@@ -594,16 +637,63 @@ class TrackBase {
             {
                 url: 'file',
                 indexURL: 'indexFile'
-            };
+            }
 
         for (const key of ['url', 'indexURL']) {
             if (cooked[key] && cooked[key] instanceof File) {
-                cooked[ lut[ key ] ] = cooked[key].name
+                cooked[lut[key]] = cooked[key].name
                 delete cooked[key]
             }
         }
 
         return cooked
+    }
+
+    // Methods to support filtering api
+
+
+    set filter(f) {
+        this._filter = f
+        this.trackView.repaintViews()
+    }
+
+    /**
+     * Return features visible in current viewports.
+     *
+     * @returns {*[]}
+     */
+    getInViewFeatures() {
+        const inViewFeatures = []
+        for (let viewport of this.trackView.viewports) {
+            if (viewport.isVisible()) {
+                const referenceFrame = viewport.referenceFrame
+                const chr = referenceFrame.chr
+                const start = referenceFrame.start
+                const end = start + referenceFrame.toBP(viewport.getWidth())
+
+                // We use the cached features  to avoid async load.  If the
+                // feature is not already loaded it is by definition not in view.
+                if (viewport.cachedFeatures) {
+                    const viewFeatures = FeatureUtils.findOverlapping(viewport.cachedFeatures, start, end)
+                    for (let f of viewFeatures) {
+                        if (!this._filter || this._filter(f)) {
+                            inViewFeatures.push(f)
+                        }
+                    }
+                }
+            }
+        }
+        return inViewFeatures
+    }
+
+    /**
+     * Return an object enumerating filterable attributes, that is attributes that can be used to filter features.
+     * The base implementation returns an empty object, overriden in subclasses.
+     *
+     * @returns {{}}
+     */
+    getFilterableAttributes() {
+        return {}
     }
 }
 

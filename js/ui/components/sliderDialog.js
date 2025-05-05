@@ -20,7 +20,7 @@ class SliderDialog {
         // dialog label
         this.label = DOMUtils.div({class: 'igv-ui-generic-dialog-one-liner'})
         this.container.appendChild(this.label)
-        this.label.text = 'Unlabeled'
+        this.label.textContent = 'Unlabeled'
 
         // input container
         this.input_container = DOMUtils.div({class: 'igv-ui-generic-dialog-input'})
@@ -56,7 +56,7 @@ class SliderDialog {
         this._input.addEventListener('input', () => {
             const number = parseFloat(this._input.value)/this._scaleFactor
             this.callback(number)
-            this._output.value = `${number.toFixed(2)}`
+            this._output.value = `${number.toFixed(this._precision)}`
         }, false)
 
         this.ok.addEventListener('click', () => {
@@ -90,6 +90,7 @@ class SliderDialog {
         this.label.textContent = options.label
 
         this._scaleFactor = options.scaleFactor
+        this._precision = options.precision || 2 // added precision option with default value of 2
         const [ minS, maxS, valueS ] = [ options.min, options.max, options.value ].map(number => (Math.floor(this._scaleFactor * number)).toString())
 
         this._input.min = minS
@@ -99,7 +100,7 @@ class SliderDialog {
         const numer = parseFloat(valueS)
         const denom = this._scaleFactor
         const number = numer/denom
-        this._output.value = `${number.toFixed(2)}`
+        this._output.value = `${number.toFixed(this._precision)}`
 
         this.callback = options.callback || options.click
 

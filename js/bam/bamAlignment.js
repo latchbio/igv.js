@@ -1,7 +1,7 @@
 
 import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
 import {createSupplementaryAlignments} from "./supplementaryAlignment.js"
-import {getBaseModificationSets} from "./mods/baseModificationUtils.js"
+import {byteToUnsignedInt, getBaseModificationSets, modificationName} from "./mods/baseModificationUtils.js"
 import orientationTypes from "./orientationTypes.js"
 
 
@@ -102,14 +102,6 @@ class BamAlignment {
     }
 
     tags() {
-        if (!this.tagDict) {
-            if (this.tagBA) {
-                this.tagDict = decodeTags(this.tagBA)
-                this.tagBA = undefined
-            } else {
-                this.tagDict = {}  // Mark so we don't try again.  The record has no tags
-            }
-        }
         return this.tagDict
     }
 
@@ -245,6 +237,25 @@ class BamAlignment {
         nameValues.push({name: 'Read Base:', value: this.readBaseAt(genomicLocation)})
         nameValues.push({name: 'Base Quality:', value: this.readBaseQualityAt(genomicLocation)})
 
+        const bmSets = this.getBaseModificationSets()
+        if(bmSets) {
+            const i = this.positionToReadIndex(genomicLocation)
+            if(undefined !== i) {
+                let found = false
+                for (let bmSet of bmSets) {
+                    if (bmSet.containsPosition(i)) {
+                        if(!found) {
+                            nameValues.push('<hr/>')
+                            nameValues.push('<b>Base modifications:</b>')
+                            found = true
+                        }
+                        const lh = Math.round((100/255) * byteToUnsignedInt(bmSet.likelihoods.get(i)))
+                        nameValues.push(`${bmSet.fullName()} @ likelihood =  ${lh}%`)
+                    }
+                }
+            }
+        }
+
         return nameValues
 
 
@@ -322,7 +333,7 @@ class BamAlignment {
     }
 
     getBaseModificationSets() {
-        this.tags()
+
         if (!this.baseModificationSets && (this.tagDict["MM"] || this.tagDict["Mm"])) {
 
             const mm = this.tagDict["MM"] || this.tagDict["Mm"]
@@ -375,6 +386,15 @@ class BamAlignment {
             // Add cases for other options as needed
             default:
                 return undefined
+        }
+    }
+
+    positionToReadIndex( position) {
+        const block = blockAtGenomicLocation(this.blocks, position)
+        if (block) {
+            return (position - block.start) + block.seqOffset
+        } else {
+            return undefined
         }
     }
 

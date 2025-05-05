@@ -25,14 +25,16 @@
 
 import BWReader from "./bwReader.js"
 import pack from "../feature/featurePacker.js"
+import BaseFeatureSource from "../feature/baseFeatureSource.js"
 
-class BWSource {
+class BWSource extends BaseFeatureSource {
 
     queryable = true
-    wgValues = {}
-    windowFunctions = ["mean", "min", "max"]
+    #wgValues = {}
+    windowFunctions = ["mean", "min", "max", "none"]
 
     constructor(config, genome) {
+        super(genome)
         this.reader = new BWReader(config, genome)
         this.genome = genome
         this.format = config.format || "bigwig"
@@ -40,12 +42,16 @@ class BWSource {
 
     async getFeatures({chr, start, end, bpPerPixel, windowFunction}) {
 
-        await  this.reader.loadHeader()
+        await this.reader.loadHeader()
         const isBigWig = this.reader.type === "bigwig"
 
-        const features = (chr.toLowerCase() === "all") ?
-            (isBigWig ? await this.getWGValues(windowFunction) : []) :
-            await this.reader.readFeatures(chr, start, chr, end, bpPerPixel, windowFunction)
+        let features
+        if ("all" === chr.toLowerCase()) {
+            const wgChromosomeNames = this.genome.wgChromosomeNames
+            features = isBigWig && wgChromosomeNames? await this.getWGValues(wgChromosomeNames, windowFunction, bpPerPixel) : []
+        } else {
+            features = await this.reader.readFeatures(chr, start, chr, end, bpPerPixel, windowFunction)
+        }
 
         if (!isBigWig) {
             pack(features)
@@ -61,26 +67,24 @@ class BWSource {
         if (this.reader.type === "bigwig") {
             return -1
         } else {
-            return this.reader.featureDensity ?  Math.floor(10000 / this.reader.featureDensity) : -1
+            return this.reader.featureDensity ? Math.floor(10000 / this.reader.featureDensity) : -1
         }
 
     }
 
-    async getWGValues(windowFunction) {
+    async getWGValues(wgChromosomeNames, windowFunction, bpPerPixel) {
 
-        const numberOfBins = 1000      // This doesn't need to be precise
         const genome = this.genome
-
-        if (this.wgValues[windowFunction]) {
-            return this.wgValues[windowFunction]
+        const cached = this.#wgValues[windowFunction]
+        if (cached && cached.bpPerPixel > 0.8 * bpPerPixel && cached.bpPerPixel < 1.2 * bpPerPixel) {
+            return cached.values
         } else {
-
-            const bpPerPixel = genome.getGenomeLength() / numberOfBins
-            const features = await this.reader.readWGFeatures(bpPerPixel, windowFunction)
+            const features = await this.reader.readWGFeatures(wgChromosomeNames, bpPerPixel, windowFunction)
             let wgValues = []
             for (let f of features) {
                 const chr = f.chr
                 const offset = genome.getCumulativeOffset(chr)
+                if (undefined === offset) continue
                 const wgFeature = Object.assign({}, f)
                 wgFeature.chr = "all"
                 wgFeature.start = offset + f.start
@@ -89,7 +93,7 @@ class BWSource {
                 wgValues.push(wgFeature)
             }
             wgValues.sort((a, b) => a.start - b.start)
-            this.wgValues[windowFunction] = wgValues
+            this.#wgValues[windowFunction] = {values: wgValues, bpPerPixel}
             return wgValues
         }
     }

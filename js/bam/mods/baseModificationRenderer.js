@@ -1,4 +1,3 @@
-
 import {byteToUnsignedInt} from "./baseModificationUtils.js"
 import {getModColor} from "./baseModificationColors.js"
 
@@ -25,18 +24,23 @@ class BaseModificationRenderer {
         this.context = context
     }
 
-    drawModifications(alignment, y, height, context, colorOption) { //alignment, bpStart, locScale, rowRect, ctx, colorOption) {
-
-        const threshold = 0.5   // TODO - parameter
+    drawModifications(alignment, y, height, context, colorOption, threshold) {
 
         const {ctx, pixelEnd, bpStart, bpPerPixel} = context
 
         const baseModificationSets = alignment.getBaseModificationSets()
         if (baseModificationSets) {
 
+            let selectedModification
+            const parts = colorOption.split(":")
+            if(parts.length == 2) {
+                colorOption = parts[0]
+                selectedModification = parts[1]
+            }
+
             for (let block of alignment.blocks) {
 
-                if(block.type === 'S') continue;   // Soft clip
+                if (block.type === 'S') continue   // Soft clip
 
                 // Compute bounds
                 const pY = y
@@ -61,6 +65,9 @@ class BaseModificationRenderer {
                     let canonicalBase = 0
 
                     for (let bmSet of baseModificationSets) {
+                        if(selectedModification && bmSet.modification !== selectedModification) {
+                            continue
+                        }
                         if (bmSet.containsPosition(i)) {
                             const lh = byteToUnsignedInt(bmSet.likelihoods.get(i))
                             noModLh -= lh
@@ -92,14 +99,13 @@ class BaseModificationRenderer {
                             pX--
                         }
                         ctx.fillRect(pX, pY, dX, Math.max(1, dY - 2))
+
                     }
                 }
             }
         }
     }
 }
-
-
 
 
 export default BaseModificationRenderer

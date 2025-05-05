@@ -23,7 +23,6 @@
  * THE SOFTWARE.
  */
 
-import $ from "../vendor/jquery-3.3.1.slim.js"
 import BamSource from "./bamSource.js"
 import TrackBase from "../trackBase.js"
 import IGVGraphics from "../igv-canvas.js"
@@ -35,6 +34,7 @@ import PairedEndStats from "./pairedEndStats.js"
 import AlignmentTrack from "./alignmentTrack.js"
 import CoverageTrack from "./coverageTrack.js"
 
+
 class BAMTrack extends TrackBase {
 
     static defaults = {
@@ -43,7 +43,8 @@ class BAMTrack extends TrackBase {
         showCoverage: true,
         showAlignments: true,
         height: 300,
-        coverageTrackHeight: 50
+        coverageTrackHeight: 50,
+        baseModificationThreshold: 0
     }
 
     constructor(config, browser) {
@@ -80,11 +81,12 @@ class BAMTrack extends TrackBase {
     }
 
     dispose() {
-        this.browser.off('trackdragend', this._dragEnd)
+        this.alignmentTrack.dispose()
     }
 
-    setHighlightedReads(highlightedReads) {
-        this.alignmentTrack.setHighlightedReads(highlightedReads)
+
+    setHighlightedReads(highlightedReads, highlightColor) {
+        this.alignmentTrack.setHighlightedReads(highlightedReads, highlightColor)
         this.updateViews()
     }
 
@@ -94,6 +96,10 @@ class BAMTrack extends TrackBase {
 
     get viewAsPairs() {
         return this.alignmentTrack.viewAsPairs
+    }
+
+    get colorBy() {
+        return this.alignmentTrack.colorBy
     }
 
     set height(h) {
@@ -146,6 +152,7 @@ class BAMTrack extends TrackBase {
     async getFeatures(chr, bpStart, bpEnd, bpPerPixel, viewport) {
 
         const alignmentContainer = await this.featureSource.getAlignments(chr, bpStart, bpEnd)
+        alignmentContainer.viewport = viewport
 
         if (alignmentContainer.hasPairs && !this._pairedEndStats && !this.config.maxFragmentLength) {
             const pairedEndStats = new PairedEndStats(alignmentContainer.allAlignments(), this.config)
@@ -277,7 +284,7 @@ class BAMTrack extends TrackBase {
         }
 
         menuItems.push({
-            object: $(createCheckbox("Show Coverage", this.showCoverage)),
+            element: createCheckbox("Show Coverage", this.showCoverage),
             click: showCoverageHandler
         })
 
@@ -289,10 +296,9 @@ class BAMTrack extends TrackBase {
         }
 
         menuItems.push({
-            object: $(createCheckbox("Show Alignments", this.showAlignments)),
+            element: createCheckbox("Show Alignments", this.showAlignments),
             click: showAlignmentHandler
         })
-
 
 
         return menuItems

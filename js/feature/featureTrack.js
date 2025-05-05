@@ -1,4 +1,3 @@
-import $ from "../vendor/jquery-3.3.1.slim.js"
 import FeatureSource from './featureSource.js'
 import TrackBase from "../trackBase.js"
 import IGVGraphics from "../igv-canvas.js"
@@ -7,15 +6,15 @@ import {reverseComplementSequence} from "../util/sequenceUtils.js"
 import {aminoAcidSequenceRenderThreshold, renderFeature} from "./render/renderFeature.js"
 import {renderSnp} from "./render/renderSnp.js"
 import {renderFusionJuncSpan} from "./render/renderFusionJunction.js"
-import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
+import {StringUtils, FeatureUtils} from "../../node_modules/igv-utils/src/index.js"
 import {ColorTable, PaletteColorTable} from "../util/colorPalletes.js"
-import {isSecureContext, expandRegion} from "../util/igvUtils.js"
+import {isSecureContext} from "../util/igvUtils.js"
 import {IGVColor} from "../../node_modules/igv-utils/src/index.js"
-
-const DEFAULT_COLOR = 'rgb(0, 0, 150)'
 
 
 class FeatureTrack extends TrackBase {
+
+    static defaultColor = 'rgb(0,0,150)'
 
     static defaults = {
         type: "annotation",
@@ -23,10 +22,8 @@ class FeatureTrack extends TrackBase {
         displayMode: "EXPANDED", // COLLAPSED | EXPANDED | SQUISHED
         margin: 10,
         featureHeight: 14,
-        autoHeight: false,
         useScore: false
     }
-
 
     constructor(config, browser) {
         super(config, browser)
@@ -41,7 +38,7 @@ class FeatureTrack extends TrackBase {
         if (config._featureSource) {
             this.featureSource = config._featureSource
             delete config._featureSource
-        } else {
+        } else if ('blat' !== config.type) {
             this.featureSource = config.featureSource ?
                 config.featureSource :
                 FeatureSource(config, this.browser.genome)
@@ -101,6 +98,9 @@ class FeatureTrack extends TrackBase {
             this.visibilityWindow = await this.featureSource.defaultVisibilityWindow()
         }
 
+        this._initialColor = this.color || this.constructor.defaultColor
+        this._initialAltColor = this.altColor || this.constructor.defaultColor
+
         return this
 
     }
@@ -122,7 +122,6 @@ class FeatureTrack extends TrackBase {
         }
     }
 
-
     /**
      * Return boolean indicating if this track supports the whole genome view.  Generally this is non-indexed feature
      * tracks.
@@ -142,12 +141,9 @@ class FeatureTrack extends TrackBase {
     }
 
     async getFeatures(chr, start, end, bpPerPixel) {
-
         const visibilityWindow = this.visibilityWindow
-
         return this.featureSource.getFeatures({chr, start, end, bpPerPixel, visibilityWindow})
     }
-
 
     /**
      * The required height in pixels required for the track content.   This is not the visible track height, which
@@ -203,7 +199,7 @@ class FeatureTrack extends TrackBase {
         }
 
 
-        if (!this.config.isMergedTrack) {
+        if (!this.isMergedTrack) {
             IGVGraphics.fillRect(context, 0, options.pixelTop, pixelWidth, pixelHeight, {'fillStyle': "rgb(255, 255, 255)"})
         }
 
@@ -213,6 +209,7 @@ class FeatureTrack extends TrackBase {
             options.rowLastX = []
             options.rowLastLabelX = []
             for (let feature of features) {
+                if (this._filter && !this._filter(feature)) continue
                 if (feature.start > bpStart && feature.end < bpEnd) {
                     const row = this.displayMode === "COLLAPSED" ? 0 : feature.row || 0
                     if (!rowFeatureCount[row]) {
@@ -228,9 +225,17 @@ class FeatureTrack extends TrackBase {
             const pixelsPerFeature = pixelWidth / maxFeatureCount
 
             let lastPxEnd = []
+            const selectedFeatures = []
             for (let feature of features) {
+
+                if (this._filter && !this._filter(feature)) continue
                 if (feature.end < bpStart) continue
                 if (feature.start > bpEnd) break
+
+                if (this.displayMode === 'COLLAPSED' && this.browser.qtlSelections.hasPhenotype(feature.name)) {
+                    selectedFeatures.push(feature)
+                }
+
                 const row = this.displayMode === 'COLLAPSED' ? 0 : feature.row
                 options.drawLabel = options.labelAllFeatures || pixelsPerFeature > 10
                 const pxEnd = Math.ceil((feature.end - bpStart) / bpPerPixel)
@@ -248,6 +253,12 @@ class FeatureTrack extends TrackBase {
                     }
                     lastPxEnd[row] = pxEnd
                 }
+            }
+
+            // If any features are selected redraw them here.  This insures selected features are visible in collapsed mode
+            for (let feature of selectedFeatures) {
+                options.drawLabel = true
+                this.render.call(this, feature, bpStart, bpPerPixel, pixelHeight, context, options)
             }
 
         } else {
@@ -324,7 +335,7 @@ class FeatureTrack extends TrackBase {
                 // If we have clicked over an exon number it.
                 // Disabled for GFF and GTF files if the visibility window is < the feature length since we don't know if we have all exons
                 const isGFF = "gff" === this.config.format || "gff3" === this.config.format || "gtf" === this.config.format
-                if (f.exons) {
+                if (f.exons && f.exons.length > 1) {
                     for (let i = 0; i < f.exons.length; i++) {
                         const exon = f.exons[i]
                         if (genomicLocation >= exon.start && genomicLocation <= exon.end) {
@@ -355,14 +366,12 @@ class FeatureTrack extends TrackBase {
 
             for (const colorScheme of ["function", "class"]) {
 
-                const object = $(createCheckbox(`Color by ${colorScheme}`, colorScheme === this.colorBy))
-
                 function colorSchemeHandler() {
                     this.colorBy = colorScheme
                     this.trackView.repaintViews()
                 }
 
-                menuItems.push({object, click: colorSchemeHandler})
+                menuItems.push({element:createCheckbox(`Color by ${colorScheme}`, colorScheme === this.colorBy), click: colorSchemeHandler})
             }
         }
 
@@ -377,8 +386,6 @@ class FeatureTrack extends TrackBase {
 
         for (const displayMode of ["COLLAPSED", "SQUISHED", "EXPANDED"]) {
 
-            const object = $(createCheckbox(lut[displayMode], displayMode === this.displayMode))
-
             function displayModeHandler() {
                 this.displayMode = displayMode
                 this.config.displayMode = displayMode
@@ -386,7 +393,7 @@ class FeatureTrack extends TrackBase {
                 this.trackView.repaintViews()
             }
 
-            menuItems.push({object, click: displayModeHandler})
+            menuItems.push({element:createCheckbox(lut[displayMode], displayMode === this.displayMode), click: displayModeHandler})
         }
 
         return menuItems
@@ -484,7 +491,10 @@ class FeatureTrack extends TrackBase {
         const feature = f._f || f    // f might be a "whole genome" wrapper
 
         let color
-        if (this.altColor && "-" === feature.strand) {
+
+        if (f.name && this.browser.qtlSelections.hasPhenotype(f.name)) {
+            color = this.browser.qtlSelections.colorForGene(f.name)
+        } else if (this.altColor && "-" === feature.strand) {
             color = (typeof this.altColor === "function") ? this.altColor(feature) : this.altColor
         } else if (this.color) {
             color = (typeof this.color === "function") ? this.color(feature) : this.color  // Explicit setting via menu, or possibly track line if !config.color
@@ -499,7 +509,7 @@ class FeatureTrack extends TrackBase {
 
         // If no explicit setting use the default
         if (!color) {
-            color = DEFAULT_COLOR   // Track default
+            color = FeatureTrack.defaultColor   // Track default
         }
 
         if (feature.alpha && feature.alpha !== 1) {
@@ -545,7 +555,8 @@ function monitorTrackDrag(track) {
 
     function onDragEnd() {
         if (track.trackView && track.displayMode !== "SQUISHED") {
-            track.trackView.updateViews()      // TODO -- refine this to the viewport that was dragged after DOM refactor
+            // Repaint views to adjust feature name if center is moved out of view
+            track.trackView.repaintViews()
         }
     }
 

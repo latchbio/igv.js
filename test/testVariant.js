@@ -6,10 +6,11 @@ import {assert} from 'chai'
 import getDataWrapper from "../js/feature/dataWrapper.js"
 import {createGenome} from "./utils/MockGenome.js"
 import pack from "../js/feature/featurePacker.js"
+import Browser from "../js/browser.js"
+import VariantTrack from "../js/variant/variantTrack.js"
 
 const genome = createGenome()
-import Browser from "../js/browser.js"
-
+const browser = {genome}
 
 suite("testVariant", function () {
 
@@ -156,9 +157,6 @@ suite("testVariant", function () {
             indexURL: "test/data/vcf/large_header.vcf.idx"
         }
 
-
-        const browser = {genome}
-
         const track = await Browser.prototype.createTrack.call(browser, config)
         assert.equal(track.type, "variant")
 
@@ -168,17 +166,23 @@ suite("testVariant", function () {
         const features = await track.getFeatures(chr, start, end)
 
         assert.equal(features.length, 3)
+
+        const attrs = track.getFilterableAttributes();
+        assert.ok(attrs);
+        assert.equal(Object.keys(attrs).length, 11)
+        const strObj = attrs["STR"]
+        assert.equal(strObj["Number"], "0")
+        assert.equal(strObj["Type"], "Flag")
+
     })
 
     test("tabix indexed - large header", async function () {
+
         const config = {
             url: "test/data/vcf/large_header.vcf",
             indexURL: "test/data/vcf/large_header.vcf.idx"
 
         }
-
-
-        const browser = {genome}
 
         const track = await Browser.prototype.createTrack.call(browser, config)
         assert.equal(track.type, "variant")
@@ -212,9 +216,6 @@ suite("testVariant", function () {
             url: "test/data/vcf/svtype_BND.vcf",
             indexed: false
         }
-
-
-        const browser = {genome}
 
         const track = await Browser.prototype.createTrack.call(browser, config)
         assert.equal(track.type, "variant")
@@ -255,6 +256,26 @@ suite("testVariant", function () {
         assert.equal(maxRow, 2)
 
         assert.ok(featureList)
+
+    })
+
+    test("Test no info fields", async function () {
+
+        const url = "test/data/vcf/noheader.vcf"
+
+        const config = {url}
+
+        const track = await Browser.prototype.createTrack.call(browser, config)
+
+        await track.postInit()
+
+        const variants = await track.getFeatures("chr6", 0, Number.MAX_SAFE_INTEGER)
+
+        assert.equal(variants.length, 3)
+
+        for (let v of variants) {
+            assert.equal(v.type, "SNP")
+        }
 
     })
 

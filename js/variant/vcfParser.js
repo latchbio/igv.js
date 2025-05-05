@@ -23,7 +23,7 @@
  * THE SOFTWARE.
  */
 
-import {Variant, Call} from "./variant.js"
+import {Variant, Call, SVComplement} from "./variant.js"
 import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
 
 /**
@@ -140,7 +140,7 @@ class VcfParser {
         while ((line = await dataWrapper.nextLine()) !== undefined) {
             if (line && !line.startsWith("#")) {
 
-                const tokens = line.split("\t")
+                const tokens = line.trim().split("\t")
                 if (tokens.length === nExpectedColumns) {
                     const variant = new Variant(tokens)
                     variant.header = this.header       // Keep a pointer to the header to interpret fields for popup text
@@ -192,14 +192,7 @@ function extractFormatFields(tokens) {
 
 function svComplement(v) {
 
-    const chr2 = v.info.CHR2
-    const pos2 = Number.parseInt(v.info.END)
-    return {
-        chr: chr2,
-        start: pos2 - 1,
-        end: pos2,
-        _f: v
-    }
+    return new SVComplement(v)
 
 }
 

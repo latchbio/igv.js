@@ -26,7 +26,6 @@
 import {GoogleAuth, igvxhr} from '../node_modules/igv-utils/src/index.js'
 import Browser from "./browser.js"
 import GenomeUtils from "./genome/genomeUtils.js"
-import {navbarDidResize} from "./responsiveNavbar.js"
 
 let allBrowsers = []
 
@@ -59,7 +58,7 @@ async function createBrowser(parentDiv, config) {
     }
     if (config.clientId && (!GoogleAuth.isInitialized())) {
         await GoogleAuth.init({
-            clientId: config.clientId,
+            client_id: config.clientId,
             apiKey: config.apiKey,
             scope: 'https://www.googleapis.com/auth/userinfo.profile'
         })
@@ -68,9 +67,6 @@ async function createBrowser(parentDiv, config) {
     // Create browser
     const browser = new Browser(config, parentDiv)
     allBrowsers.push(browser)
-
-    // Lod initial sessio
-    browser.startSpinner()
 
     const sessionURL = config.sessionURL || config.session || config.hubURL
     if (sessionURL) {
@@ -81,8 +77,7 @@ async function createBrowser(parentDiv, config) {
         await browser.loadSessionObject(config)
     }
 
-    browser.stopSpinner()
-    navbarDidResize(browser, browser.$navigation.width())
+    browser.navbar.navbarDidResize()
 
     return browser
 
@@ -126,6 +121,10 @@ function setDefaults(config) {
         config.showIdeogram = true
     }
 
+    if (undefined == config.showCytobandNames) {
+        config.showCytobandNames = false
+    }
+
     if (undefined === config.showCircularView) {
         config.showCircularView = false
     }
@@ -140,14 +139,6 @@ function setDefaults(config) {
 
     if (undefined === config.showTrackLabels) {
         config.showTrackLabels = true
-    }
-
-    if (undefined === config.doShowROITableButton) {
-        config.doShowROITableButton = false
-    }
-
-    if (undefined === config.showROITable) {
-        config.showROITable = false
     }
 
     if (undefined === config.showCursorTrackingGuideButton) {

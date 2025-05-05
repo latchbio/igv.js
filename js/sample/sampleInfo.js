@@ -1,60 +1,42 @@
-import {igvxhr, FileUtils, IGVMath} from '../../node_modules/igv-utils/src/index.js'
+import {igvxhr, IGVMath} from '../../node_modules/igv-utils/src/index.js'
 import {
     appleCrayonRGB,
     rgbaColor,
-    rgbStringHeatMapLerp, rgbStringLerp,
-    rgbStringTokens
+    rgbStringHeatMapLerp, rgbStringTokens
 } from "../util/colorPalletes.js"
 import {distinctColorsPalette} from './sampleInfoPaletteLibrary.js'
 import TrackBase from "../trackBase.js"
 
-const colorForNA = appleCrayonRGB('magnesium')
-const sampleInfoFileHeaders = ['#sampleTable', '#sampleMapping', '#colors']
-
 class SampleInfo {
 
     static emptySpaceReplacement = '|'
-
-    sampleDictionary = {}
-    attributeNames = []
-    sampleMappingDictionary = {}
-    colorDictionary = {}
-    attributeRangeLUT = {}
+    static colorForNA = appleCrayonRGB('magnesium')
+    static sampleInfoFileHeaders = ['#sampleTable', '#sampleMapping', '#colors']
 
     constructor(browser) {
-
-        this.sampleInfoFiles = []
-
         const found = browser.tracks.some(t => typeof t.getSamples === 'function')
         if (found.length > 0) {
             browser.sampleInfoControl.setButtonVisibility(true)
         }
-
-        // TODO -- this just looks wrong, and should not be necessary.   If it is necessary the code should be in Browser
-        // browser.on('trackorderchanged', ignore => {
-        //
-        //     if (this.hasAttributes()) {
-        //
-        //         const found = browser.getTracks().some(track => typeof track.getSamples === 'function')
-        //
-        //         if (found.length > 0) {
-        //             browser.layoutChange()
-        //         }
-        //     }
-        // })
-
+        this.initialize()
     }
 
     initialize() {
+        this.sampleInfoFiles = []
         this.attributeNames = []
         this.sampleDictionary = {}
         this.sampleMappingDictionary = {}
         this.colorDictionary = {}
         this.attributeRangeLUT = {}
+        this.initialized = false
     }
 
     get attributeCount() {
         return this.attributeNames ? this.attributeNames.length : 0
+    }
+
+    isInitialized() {
+        return this.initialized
     }
 
     hasAttributes() {
@@ -63,8 +45,47 @@ class SampleInfo {
 
     getAttributes(sampleName) {
 
-        const key = 0 === Object.keys(this.sampleMappingDictionary) ? sampleName : (this.sampleMappingDictionary[sampleName] || sampleName)
+        const key = this.sampleMappingDictionary[sampleName] || sampleName
         return this.sampleDictionary[key]
+    }
+
+    async loadSampleInfo(config) {
+
+        if (config.url) {
+            await this.loadSampleInfoFile(config.url)
+        } else {
+
+            const samples = { ...config }
+            for (const [key, record] of Object.entries(samples)) {
+                samples[key] = SampleInfo.toNumericalRepresentation(record)
+            }
+
+            const [ value ] = Object.values(samples)
+            const attributes = Object.keys(value)
+
+            this.loadSampleInfoHelper(attributes, samples)
+
+        }
+
+        this.initialized = true
+    }
+
+    loadSampleInfoHelper(attributes, samples){
+
+        // Establish the range of values for each attribute
+        const lut = createAttributeRangeLUT(attributes, samples)
+        accumulateDictionary(this.attributeRangeLUT, lut)
+
+        // Ensure unique attribute names list
+        const currentAttributeNameSet = new Set(this.attributeNames)
+        for (const name of attributes) {
+            if (!currentAttributeNameSet.has(name)) {
+                this.attributeNames.push(name)
+            }
+        }
+
+        accumulateDictionary(this.sampleDictionary, samples)
+
     }
 
     async loadSampleInfoFile(path) {
@@ -77,35 +98,7 @@ class SampleInfo {
         }
     }
 
-    #processSampleInfoFileAsString(string) {
-
-        const sectionDictionary = createSectionDictionary(string)
-
-        for (const [header, value] of Object.entries(sectionDictionary)) {
-            switch (header) {
-                case '#sampleTable':
-                    this.#accumulateSampleTableDictionary(value)
-                    break
-                case '#sampleMapping':
-                    this.#accumulateSampleMappingDictionary(value)
-                    break
-                case '#colors':
-                    this.#accumulateColorScheme(value)
-                    break
-
-            }
-        }
-
-    }
-
     getAttributeColor(attribute, value) {
-
-        // Use for diagnostic rendering
-        // return randomRGB(180, 240)
-        ``
-        // if (value === 'NA') {
-        //     console.log(`${ attribute } : ${ value }`)
-        // }
 
         let color
 
@@ -123,7 +116,7 @@ class SampleInfo {
 
         } else if (typeof value === "string") {
 
-            color = 'NA' === value ? colorForNA : stringToRGBString(value)
+            color = 'NA' === value ? SampleInfo.colorForNA : SampleInfo.stringToRGBString(value)
 
         } else {
 
@@ -191,6 +184,27 @@ class SampleInfo {
         return json
     }
 
+    #processSampleInfoFileAsString(string) {
+
+        const sectionDictionary = createSectionDictionary(string)
+
+        for (const [header, value] of Object.entries(sectionDictionary)) {
+            switch (header) {
+                case '#sampleTable':
+                    this.#accumulateSampleTableDictionary(value)
+                    break
+                case '#sampleMapping':
+                    this.#accumulateSampleMappingDictionary(value)
+                    break
+                case '#colors':
+                    this.#accumulateColorScheme(value)
+                    break
+
+            }
+        }
+
+    }
+
     #accumulateSampleTableDictionary(lines) {
 
         // shift array with first item that is 'sample' or 'Linking_id'. Remaining items are attribute names
@@ -230,22 +244,11 @@ class SampleInfo {
         } // for (lines)
 
         for (const [key, record] of Object.entries(samples)) {
-            samples[key] = toNumericalRepresentation(record)
+            samples[key] = SampleInfo.toNumericalRepresentation(record)
         }
 
-        // Establish the range of values for each attribute
-        const lut = createAttributeRangeLUT(attributes, samples)
-        accumulateDictionary(this.attributeRangeLUT, lut)
+        this.loadSampleInfoHelper(attributes, samples)
 
-        // Ensure unique attribute names list
-        const currentAttributeNameSet = new Set(this.attributeNames)
-        for (const name of attributes) {
-            if (!currentAttributeNameSet.has(name)) {
-                this.attributeNames.push(name)
-            }
-        }
-
-        accumulateDictionary(this.sampleDictionary, samples)
     }
 
     #accumulateSampleMappingDictionary(lines) {
@@ -346,7 +349,7 @@ class SampleInfo {
                 this.colorDictionary[attribute] = attributeValue => {
 
                     if ('NA' === attributeValue) {
-                        return colorForNA
+                        return SampleInfo.colorForNA
                     } else {
                         const [min, max] = this.attributeRangeLUT[attribute]
                         const interpolant = (attributeValue - min) / (max - min)
@@ -366,8 +369,34 @@ class SampleInfo {
 
     }
 
-}
+    static toNumericalRepresentation(obj) {
+        const result = Object.assign({}, obj)
 
+        for (const [key, value] of Object.entries(result)) {
+            if (typeof value === 'string' && !isNaN(value)) {
+                result[key] = Number(value)
+            }
+        }
+
+        return result
+    }
+
+    static stringToRGBString(str) {
+        let hash = 0
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash)
+        }
+
+        let color = []
+        for (let i = 0; i < 3; i++) {
+            const value = (hash >> (i * 8)) & 0xff
+            color.push(value)
+        }
+
+        return `rgb(${color.join(', ')})`
+    }
+
+}
 
 function createSectionDictionary(string) {
 
@@ -378,14 +407,14 @@ function createSectionDictionary(string) {
     let currentHeader
 
     // If the first line does not start with a section header an initial #sampleTable is implied
-    if (!sampleInfoFileHeaders.includes(lines[0])) {
+    if (!SampleInfo.sampleInfoFileHeaders.includes(lines[0])) {
         currentHeader = '#sampleTable'
         dictionary[currentHeader] = []
     }
 
     for (const line of lines) {
 
-        if (sampleInfoFileHeaders.includes(line)) {
+        if (SampleInfo.sampleInfoFileHeaders.includes(line)) {
             currentHeader = line
             dictionary[currentHeader] = []
         } else if (currentHeader && false === line.startsWith('#')) {
@@ -403,7 +432,6 @@ function accumulateDictionary(accumulator, dictionary) {
         }
     }
 }
-
 
 function createAttributeRangeLUT(names, dictionary) {
 
@@ -448,35 +476,6 @@ function createAttributeRangeLUT(names, dictionary) {
     }
 
     return lut
-}
-
-function toNumericalRepresentation(obj) {
-
-    const result = Object.assign({}, obj)
-
-    for (const [key, value] of Object.entries(result)) {
-        if (typeof value === 'string' && !isNaN(value)) {
-            result[key] = Number(value)
-        }
-    }
-
-    return result
-}
-
-function stringToRGBString(str) {
-
-    let hash = 0
-    for (let i = 0; i < str.length; i++) {
-        hash = str.charCodeAt(i) + ((hash << 5) - hash)
-    }
-
-    let color = []
-    for (let i = 0; i < 3; i++) {
-        const value = (hash >> (i * 8)) & 0xff
-        color.push(value)
-    }
-
-    return `rgb(${color.join(', ')})`
 }
 
 export default SampleInfo

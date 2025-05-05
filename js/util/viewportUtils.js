@@ -36,11 +36,7 @@ function createViewport(trackView, column, referenceFrame, width) {
         return new IdeogramViewport(trackView, column, referenceFrame, width)
     } else {
         const viewportObject = new TrackViewport(trackView, column, referenceFrame, width)
-
-        // if ('sequence' === trackView.track.type) {
-        //     viewportObject.$viewport.get(0).style.marginTop = '0px'
-        // }
-
+        referenceFrame.viewport = viewportObject
         return viewportObject
     }
 }

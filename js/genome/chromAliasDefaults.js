@@ -14,6 +14,9 @@ class ChromAliasDefaults {
         this.update(id, chromosomeNames)
     }
 
+    async preload() {
+        // no-op
+    }
 
     /**
      * Return the canonical chromosome name for the alias.  If none found return the alias
@@ -47,7 +50,6 @@ class ChromAliasDefaults {
                     continue;
                 }
 
-                let skipRest = false
                 const record = {chr: name}
                 aliasRecords.push(record)
 
@@ -63,66 +65,86 @@ class ChromAliasDefaults {
                         record["ncbi-gi"] = alias
                     }
                 } else {
+
+                    if (name === "chrM") {
+                        record["ncbi"] = "MT"
+                    } else if (name === "MT") {
+                        record["ucsc"] = "chrM"
+                    } else if (name.toLowerCase().startsWith("chr") && Number.isInteger(Number(name.substring(3)))) {
+                        record["ncbi"] = name.substring(3)
+                    } else if (Number.isInteger(Number(name))) {
+                        record["ucsc"] = "chr" + name
+                    }
+
                     // Special cases for human and mouse
                     if (id.startsWith("hg") || id.startsWith("GRCh") || id === "1kg_ref" || id === "b37") {
                         switch (name) {
                             case "23":
                                 record["ucsc"] = "chrX"
-                                skipRest = true
+                                record["assembly"] = "X"
                                 break
                             case "24":
                                 record["ucsc"] = "chrY"
-                                skipRest = true
+                                record["assembly"] = "Y"
                                 break
                             case "chrX":
                                 record["ncbi"] = "23"
-                                skipRest = true
+                                record["assembly"] = "X"
                                 break
                             case "chrY":
                                 record["ncbi"] = "24"
-                                skipRest = true
+                                record["assembly"] = "Y"
                                 break
+                            case "X":
+                                record["ucsc"] = "chrX"
+                                record["ncbi"] = "23"
+                                break
+                            case "Y":
+                                record["ucsc"] = "chrY"
+                                record["ncbi"] = "24"
+                                break
+
                         }
                     } else if (id.startsWith("mm") || id.startsWith("GRCm") || id.startsWith("rheMac")) {
                         switch (name) {
                             case "21":
                                 record["ucsc"] = "chrX"
-                                skipRest = true
+                                record["assembly"] = "X"
                                 break
                             case "22":
                                 record["ucsc"] = "chrY"
-                                skipRest = true
+                                record["assembly"] = "Y"
                                 break
                             case "chrX":
                                 record["ncbi"] = "21"
-                                skipRest = true
+                                record["assembly"] = "X"
                                 break
                             case "chrY":
                                 record["ncbi"] = "22"
-                                skipRest = true
+                                record["assembly"] = "Y"
                                 break
-                        }
-                    }
-                    if (skipRest) continue
+                            case "X":
+                                record["ucsc"] = "chrX"
+                                record["ncbi"] = "21"
+                                break
+                            case "Y":
+                                record["ucsc"] = "chrY"
+                                record["ncbi"] = "22"
+                                break
 
-                    //
-                    if (name === "chrM") {
-                        record["ncbi"] = "MT"
-                    } else if (name === "MT") {
-                        record["ucsc"] = "chrM"
-                    } else if (name.toLowerCase().startsWith("chr")) {
-                        record["ncbi"] = name.substring(3)
-                    } else if (Number.isInteger(Number(name))) {
-                        record["ucsc"] = "chr" + name
+                        }
                     }
                 }
             }
 
+
             for (let rec of aliasRecords) {
+                ChromAliasDefaults.addCaseAliases(rec)
                 for (let a of Object.values(rec)) {
                     this.aliasRecordCache.set(a, rec)
                 }
             }
+
         }
     }
 
@@ -138,6 +160,27 @@ class ChromAliasDefaults {
     static getNCBIName(name) {
         const tokens = name.split("\\|")
         return tokens[tokens.length - 1]
+    }
+
+    static addCaseAliases(aliasRecord) {
+
+            // Add some aliases for case insensitivy
+            const upper = aliasRecord.chr.toUpperCase()
+            const lower = aliasRecord.chr.toLowerCase()
+            const cap = aliasRecord.chr.charAt(0).toUpperCase() + aliasRecord.chr.slice(1)
+            if(aliasRecord.chr !== upper) {
+                aliasRecord["_uppercase"] = upper
+            }
+            if(aliasRecord.chr !== lower) {
+                aliasRecord["_lowercase"] = lower
+            }
+            if(aliasRecord.chr !== cap) {
+                aliasRecord["_cap"] = cap
+            }
+
+            const chrPrefixAlias = aliasRecord.chr.startsWith("chr") ? aliasRecord.chr.substring(3) : "chr" + aliasRecord.chr;
+            aliasRecord["_chrprefix_"] = chrPrefixAlias;
+
     }
 
 }

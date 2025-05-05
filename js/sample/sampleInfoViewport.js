@@ -5,8 +5,7 @@ import {sampleInfoTileWidth, sampleInfoTileXShim} from "./sampleInfoConstants.js
 import IGVGraphics from "../igv-canvas.js"
 import {defaultRulerHeight} from "../rulerTrack.js"
 
-// const sampleInfoColumnHeightShim = 64
-const sampleInfoColumnHeightShim = 96
+const MaxSampleInfoColumnHeight = 128
 
 class SampleInfoViewport {
 
@@ -31,6 +30,8 @@ class SampleInfoViewport {
         this.canvas = document.createElement('canvas')
         this.viewport.appendChild(this.canvas)
         this.ctx = this.canvas.getContext("2d")
+        this.ctx.font = '10px verdana'
+
 
         this.contentTop = 0
         this.hitList = undefined
@@ -50,7 +51,7 @@ class SampleInfoViewport {
 
         let requiredHeight
         if (this.browser.trackViews.length > 1 && null === this.viewport.previousElementSibling) {
-            const [at, bt] = [this.browser.trackViews[0].track, this.browser.trackViews[1].track]
+            const [at, bt] = [this.browser.ideogramTrackView.track, this.browser.rulerTrackView.track]
             requiredHeight = at.height + bt.height
         } else {
             requiredHeight = this.viewport.clientHeight
@@ -108,8 +109,8 @@ class SampleInfoViewport {
         this.ctx.scale(dpi, dpi)
 
         if (null === this.viewport.previousElementSibling) {
-            IGVGraphics.fillRect(this.ctx, 0, 0, this.ctx.canvas.width, this.ctx.canvas.height, {fillStyle: randomRGB(150, 250)})
-            // IGVGraphics.fillRect(this.ctx, 0, 0, this.ctx.canvas.width, this.ctx.canvas.height, { fillStyle: appleCrayonRGB('snow') })
+            // IGVGraphics.fillRect(this.ctx, 0, 0, this.ctx.canvas.width, this.ctx.canvas.height, {fillStyle: randomRGB(150, 250)})
+            IGVGraphics.fillRect(this.ctx, 0, 0, this.ctx.canvas.width, this.ctx.canvas.height, { fillStyle: appleCrayonRGB('snow') })
         }
 
     }
@@ -124,10 +125,18 @@ class SampleInfoViewport {
                 this.draw({context: this.ctx, samples})
             }
         } else if (null === this.viewport.previousElementSibling) {
-            this.browser.trackViews[1].setTrackHeight(true === this.browser.sampleInfoControl.showSampleInfo ? sampleInfoColumnHeightShim : defaultRulerHeight, true)
+            if(this.browser.rulerTrackView) {
+                this.browser.rulerTrackView.setTrackHeight(true === this.browser.sampleInfoControl.showSampleInfo ? this.calculateSampleInfoColumnHeight() : defaultRulerHeight, true)
+            }
             this.renderSampleInfoColumns(this.ctx)
         }
 
+    }
+
+    calculateSampleInfoColumnHeight() {
+        const lengths = this.browser.sampleInfo.attributeNames.map(name => this.ctx.measureText(name).width)
+        const fudge = 4
+        return fudge + Math.min(Math.max(...lengths), MaxSampleInfoColumnHeight)
     }
 
     draw({context, samples}) {
@@ -203,12 +212,11 @@ class SampleInfoViewport {
             const yShim = 2
 
             ctx.save()
+            ctx.font = '10px verdana'
 
             ctx.translate(x + width / 2, y + height)
             ctx.rotate(-Math.PI / 2)
             ctx.textAlign = 'left'
-
-            ctx.font = '10px verdana'
             ctx.fillStyle = appleCrayonRGB('lead')
             ctx.fillText(text, xShim, yShim)
 
@@ -337,5 +345,4 @@ class SampleInfoViewport {
 
 }
 
-export {sampleInfoColumnHeightShim}
 export default SampleInfoViewport

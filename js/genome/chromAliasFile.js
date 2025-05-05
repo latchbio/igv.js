@@ -9,8 +9,9 @@
  * @param config
  * @returns {Promise<*[]>}
  */
-import {isNumber, buildOptions} from "../util/igvUtils.js"
+import {buildOptions} from "../util/igvUtils.js"
 import {igvxhr, StringUtils} from "../../node_modules/igv-utils/src/index.js"
+import ChromAliasDefaults from "./chromAliasDefaults.js"
 
 class ChromAliasFile {
 
@@ -20,6 +21,10 @@ class ChromAliasFile {
         this.aliasURL = aliasURL
         this.config = config
         this.genome = genome
+    }
+
+    async preload() {
+        return this.loadAliases();
     }
 
     /**
@@ -69,11 +74,16 @@ class ChromAliasFile {
                 }
 
                 const aliasRecord = {chr}
+                ChromAliasDefaults.addCaseAliases(aliasRecord)
                 for (let i = 0; i < tokens.length; i++) {
                     const key = this.headings ? this.headings[i] : i
                     aliasRecord[key] = tokens[i]
-                    this.aliasRecordCache.set(tokens[i], aliasRecord)
                 }
+
+                for (let a of Object.values(aliasRecord)) {
+                    this.aliasRecordCache.set(a, aliasRecord)
+                }
+
             }
         }
     }

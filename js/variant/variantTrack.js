@@ -24,7 +24,6 @@
  * THE SOFTWARE.
  */
 
-import $ from "../vendor/jquery-3.3.1.slim.js"
 import FeatureSource from '../feature/featureSource.js'
 import TrackBase from "../trackBase.js"
 import IGVGraphics from "../igv-canvas.js"
@@ -32,19 +31,20 @@ import {createCheckbox} from "../igv-icons.js"
 import {ColorTable, PaletteColorTable} from "../util/colorPalletes.js"
 import SampleInfo from "../sample/sampleInfo.js"
 import {makeVCFChords, sendChords} from "../jbrowse/circularViewUtils.js"
-import {FileUtils, StringUtils, IGVColor} from "../../node_modules/igv-utils/src/index.js"
+import {FileUtils, IGVColor, StringUtils} from "../../node_modules/igv-utils/src/index.js"
 import CNVPytorTrack from "../cnvpytor/cnvpytorTrack.js"
 import {doSortByAttributes} from "../sample/sampleUtils.js"
+import {packFeatures} from "../feature/featureUtils.js"
+import {createElementWithString} from "../ui/utils/dom-utils.js"
 
 const isString = StringUtils.isString
 
-const DEFAULT_COLOR = "rgb(0,0,150)"
 const DEFAULT_VISIBILITY_WINDOW = 1000000
 const TOP_MARGIN = 10
-const STANDARD_FIELDS = new Map([["REF", "referenceBases"], ["ALT", "alternateBases"], ["QUAL", "quality"], ["FILTER", "filter"]])
-
 
 class VariantTrack extends TrackBase {
+
+    static defaultColor = 'rgb(0,0,150)'
 
     static defaults = {
         displayMode: "EXPANDED",
@@ -59,7 +59,6 @@ class VariantTrack extends TrackBase {
         expandedGroupGap: 10,
         squishedGroupGap: 5,
         featureHeight: 14,
-        color: "rgb(0,0,150)",
         noGenotypeColor: "rgb(200,180,180)",
         noCallColor: "rgb(225, 225, 225)",
         nonRefColor: "rgb(200, 200, 215)",
@@ -67,18 +66,20 @@ class VariantTrack extends TrackBase {
         homrefColor: "rgb(200, 200, 200)",
         homvarColor: "rgb(17,248,254)",
         hetvarColor: "rgb(34,12,253)",
-        colorBy: undefined,
+        refColor: "rgb(0,0,220)",
+        altColor: "rgb(255,0,0)",
         visibilityWindow: undefined,
         labelDisplayMode: undefined,
         type: "variant"
     }
 
-    #sortDirections = new Map()
+    _sortDirections = new Map()
 
     constructor(config, browser) {
         super(config, browser)
     }
 
+    // Note -- init gets called during base class construction.  Confusing
     init(config) {
 
         super.init(config)
@@ -90,14 +91,19 @@ class VariantTrack extends TrackBase {
 
         this.featureSource = FeatureSource(config, this.browser.genome)
 
-        this._initColorBy = config.colorBy
+        this.colorTables = new Map()
         if (config.colorTable) {
-            this.colorTables = new Map()
-            this.colorTables.set(config.colorBy, new ColorTable(config.colorTable))
+            const key = config.colorBy || "*"
+            this.colorTables.set(key, new ColorTable(config.colorTable))
         }
-        this._color = config.color
-        this._strokecolor = config.strokecolor
+
+        this.strokecolor = config.strokecolor
         this._context_hook = config.context_hook
+
+        // If a color is explicitly set disable colorBy
+        if (config.color) {
+            this.colorBy = undefined
+        }
 
         // The number of variant rows are computed dynamically, but start with "1" by default
         this.nVariantRows = 1
@@ -113,11 +119,40 @@ class VariantTrack extends TrackBase {
         if (config.sort) {
             this.initialSort = config.sort
         }
+
+        this._colorByItems = new Map([['none', 'None']])
     }
 
     async postInit() {
 
         this.header = await this.getHeader()
+
+        // Set colorBy, if not explicitly set default to allele frequency, if available, otherwise default to none (undefined)
+        if (this.header.INFO) {
+            const infoFields = new Set(Object.keys(this.header.INFO))
+            if (this.config.colorBy) {
+                this.colorBy = this.config.colorBy
+            } else if (!this.config.color && infoFields.has('AF')) {
+                this.colorBy = 'AF'
+            }
+
+            // Configure menu items based on info available
+            if (infoFields.has('AF')) {
+                this._colorByItems.set('AF', 'Allele frequency')
+            }
+            if (infoFields.has('VT')) {
+                this._colorByItems.set('VT', 'Variant Type')
+            }
+            if (infoFields.has('SVTYPE')) {
+                this._colorByItems.set('SVTYPE', 'SV Type')
+            }
+        }
+
+        if (this.config.colorBy && !this._colorByItems.has(this.config.colorBy)) {
+            this._colorByItems.set(this.config.colorBy, this.config.colorBy)
+        }
+
+
         if (this.disposed) return   // This track was removed during async load
 
         if (this.header && !this.sampleKeys) {
@@ -134,6 +169,9 @@ class VariantTrack extends TrackBase {
             }
         }
 
+        this._initialColor = this.color || this.constructor.defaultColor
+        this._initialAltColor = this.altColor || this.constructor.defaultColor
+
         return this
     }
 
@@ -142,12 +180,14 @@ class VariantTrack extends TrackBase {
     }
 
     get color() {
-        return this._color || DEFAULT_COLOR
+        return this._color || VariantTrack.defaultColor
     }
 
     set color(c) {
         this._color = c
-        this.colorBy = undefined
+        if (c) {
+            this.colorBy = undefined
+        }
     }
 
     async getHeader() {
@@ -263,18 +303,19 @@ class VariantTrack extends TrackBase {
             const bpEnd = bpStart + pixelWidth * bpPerPixel + 1
 
             // Loop through variants.  A variant == a row in a VCF file
-            for (let variant of features) {
+            for (let v of features) {
 
-                if (variant.end < bpStart) continue
-                if (variant.start > bpEnd) break
+                if (this._filter && !this._filter(v)) continue
+                if (v.end < bpStart) continue
+                if (v.start > bpEnd) break
 
                 const variantHeight = ("SQUISHED" === this.displayMode) ? this.squishedVariantHeight : this.expandedVariantHeight
-                const y = TOP_MARGIN + ("COLLAPSED" === this.displayMode ? 0 : variant.row * (variantHeight + vGap))
+                const y = TOP_MARGIN + ("COLLAPSED" === this.displayMode ? 0 : v.row * (variantHeight + vGap))
                 const h = variantHeight
 
                 // Compute pixel width.   Minimum width is 3 pixels,  if > 5 pixels create gap between variants
-                let x = (variant.start - bpStart) / bpPerPixel
-                let x1 = (variant.end - bpStart) / bpPerPixel
+                let x = (v.start - bpStart) / bpPerPixel
+                let x1 = (v.end - bpStart) / bpPerPixel
 
                 let w = Math.max(1, x1 - x)
                 if (w < 3) {
@@ -284,8 +325,26 @@ class VariantTrack extends TrackBase {
                     x += 1
                     w -= 2
                 }
-                context.fillStyle = this.getColorForFeature(variant)
-                context.fillRect(x, y, w, h)
+
+                const variant = v._f || v   // True variant record, used for whole genome view and SV mate records
+                let af
+                try {
+                    af = variant.alleleFreq()
+                } catch (e) {
+                    console.log(e)
+                }
+                if ("AF" === this.colorBy && af) {
+                    const hAlt = Math.min(1, af) * h
+                    const hRef = h - hAlt
+                    context.fillStyle = variant.isFiltered() ? this.refColorFiltered : this.refColor
+                    context.fillRect(x, y, w, hRef)
+                    context.fillStyle = variant.isFiltered() ? this.altColorFiltered : this.altColor
+                    context.fillRect(x, y + hRef, w, hAlt)
+
+                } else {
+                    context.fillStyle = this.getColorForFeature(variant)
+                    context.fillRect(x, y, w, h)
+                }
 
                 //only paint stroke if a color is defined
                 let strokecolor = this.getVariantStrokecolor(variant)
@@ -358,28 +417,32 @@ class VariantTrack extends TrackBase {
         }
     };
 
+    get refColorFiltered() {
+        if (!this._refColorFiltered) {
+            this._refColorFiltered = IGVColor.addAlpha(this.refColor, 0.2)
+        }
+        return this._refColorFiltered
+    }
+
+    get altColorFiltered() {
+        if (!this._altColorFiltered) {
+            this._altColorFiltered = IGVColor.addAlpha(this.altColor, 0.2)
+        }
+        return this._altColorFiltered
+    }
 
     getColorForFeature(variant) {
 
         const v = variant._f || variant
         let variantColor
 
-        if (this.colorBy) {
-            const colorBy = this.colorBy
-            let value
-            if (v.info.hasOwnProperty(colorBy)) {
-                value = v.info[colorBy]
-            } else if (STANDARD_FIELDS.has(colorBy)) {
-                const key = STANDARD_FIELDS.get(colorBy)
-                value = v[key]
-            }
-            variantColor = this.getVariantColorTable(colorBy).getColor(value)
-            if (!variantColor) {
-                variantColor = "gray"
-            }
+        if (this.colorBy && 'none' !== this.colorBy) {
 
-        } else if (this._color) {
-            variantColor = (typeof this._color === "function") ? this._color(variant) : this._color
+            const value = v.getAttributeValue(this.colorBy)
+            variantColor = value !== undefined ? this.getVariantColorTable(this.colorBy).getColor(value) : "gray"
+
+        } else if (this.color) {
+            variantColor = (typeof this.color === "function") ? this.color(variant) : this.color
         } else if ("NONVARIANT" === v.type) {
             variantColor = this.nonRefColor
         } else if ("MIXED" === v.type) {
@@ -401,8 +464,8 @@ class VariantTrack extends TrackBase {
         const v = variant._f || variant
         let variantStrokeColor
 
-        if (this._strokecolor) {
-            variantStrokeColor = (typeof this._strokecolor === "function") ? this._strokecolor(v) : this._strokecolor
+        if (this.strokecolor) {
+            variantStrokeColor = (typeof this.strokecolor === "function") ? this.strokecolor(v) : this.strokecolor
         } else {
             variantStrokeColor = undefined
         }
@@ -558,24 +621,18 @@ class VariantTrack extends TrackBase {
             // For now stick to explicit info fields (well, exactly 1 for starters)
             if (this.header.INFO) {
                 //const stringInfoKeys = Object.keys(this.header.INFO).filter(key => this.header.INFO[key].Type === "String")
-                const stringInfoKeys = this.header.INFO.SVTYPE ? ['SVTYPE'] : []
-                if (this._initColorBy && this._initColorBy !== 'SVTYPE') {
-                    stringInfoKeys.push(this._initColorBy)
+                const colorByItems = this._colorByItems
+                menuItems.push('<hr/>')
+                const element = createElementWithString('<div class="igv-track-menu-category igv-track-menu-border-top">')
+                element.textContent = 'Color by:'
+                menuItems.push({name: undefined, element, click: undefined, init: undefined})
+                for (let key of colorByItems.keys()) {
+                    const selected = (this.colorBy === key)
+                    menuItems.push(this.colorByCB({key, label: colorByItems.get(key)}, selected))
                 }
-                if (stringInfoKeys.length > 0) {
-                    menuItems.push('<hr/>')
-                    const $e = $('<div class="igv-track-menu-category igv-track-menu-border-top">')
-                    $e.text('Color by:')
-                    menuItems.push({name: undefined, object: $e, click: undefined, init: undefined})
-                    stringInfoKeys.sort()
-                    for (let item of stringInfoKeys) {
-                        const selected = (this.colorBy === item)
-                        const label = item ? item : 'None'
-                        menuItems.push(this.colorByCB({key: item, label: label}, selected))
-                    }
-                    menuItems.push(this.colorByCB({key: undefined, label: 'None'}, this.colorBy === undefined))
-                    menuItems.push('<hr/>')
-                }
+
+                menuItems.push(this.colorByCB({key: 'info', label: 'Info field...'}))
+
             }
         }
 
@@ -592,21 +649,21 @@ class VariantTrack extends TrackBase {
                 })) {
 
 
-                    const object = $('<div>')
-                    object.html(`&nbsp;&nbsp;${attribute.split(SampleInfo.emptySpaceReplacement).join(' ')}`)
+                    const element = document.createElement('div');
+                    element.innerHTML = `&nbsp;&nbsp;${attribute.split(SampleInfo.emptySpaceReplacement).join(' ')}`;
 
-                    function attributeSort() {
-                        const sortDirection = this.#sortDirections.get(attribute) || 1
+                    const attributeSort = () => {
+                        const sortDirection = this._sortDirections.get(attribute) || 1
                         this.sortByAttribute(attribute, sortDirection)
                         this.config.sort = {
                             option: "ATTRIBUTE",
                             attribute: attribute,
                             direction: sortDirection > 0 ? "ASC" : "DESC"
                         }
-                        this.#sortDirections.set(attribute, sortDirection * -1)
+                        this._sortDirections.set(attribute, sortDirection * -1)
                     }
 
-                    menuItems.push({object, click: attributeSort})
+                    menuItems.push({element, click: attributeSort})
                 }
             }
         }
@@ -614,9 +671,9 @@ class VariantTrack extends TrackBase {
         menuItems.push('<hr/>')
 
         if (this.getSampleCount() > 0) {
-            menuItems.push({object: $('<div class="igv-track-menu-border-top">')})
+            menuItems.push({ element: createElementWithString('<div class="igv-track-menu-border-top">') })
             menuItems.push({
-                object: $(createCheckbox("Show Genotypes", this.showGenotypes)),
+                element: createCheckbox("Show Genotypes", this.showGenotypes),
                 click: function showGenotypesHandler() {
                     this.showGenotypes = !this.showGenotypes
                     this.trackView.checkContentHeight()
@@ -627,7 +684,7 @@ class VariantTrack extends TrackBase {
             })
         }
 
-        menuItems.push({object: $('<div class="igv-track-menu-border-top">')})
+        menuItems.push({element: createElementWithString('<div class="igv-track-menu-border-top">')})
         for (let displayMode of ["COLLAPSED", "SQUISHED", "EXPANDED"]) {
             var lut =
                 {
@@ -638,7 +695,7 @@ class VariantTrack extends TrackBase {
 
             menuItems.push(
                 {
-                    object: $(createCheckbox(lut[displayMode], displayMode === this.displayMode)),
+                    element: createCheckbox(lut[displayMode], displayMode === this.displayMode),
                     click: function displayModeHandler() {
                         this.displayMode = displayMode
                         this.trackView.checkContentHeight()
@@ -688,8 +745,8 @@ class VariantTrack extends TrackBase {
             // We can't know genomic location intended with precision, define a buffer 5 "pixels" wide in genomic coordinates
             const bpWidth = referenceFrame.toBP(2.5)
 
-            const direction = this.#sortDirections.get('genotype') || 1
-            this.#sortDirections.set('genotype', direction * -1)  // Toggle for next sort
+            const direction = this._sortDirections.get('genotype') || 1
+            this._sortDirections.set('genotype', direction * -1)  // Toggle for next sort
 
             list.push(
                 {
@@ -801,46 +858,64 @@ class VariantTrack extends TrackBase {
      * Create a "color by" checkbox menu item, optionally initially checked
      * @param menuItem
      * @param showCheck
-     * @returns {{init: undefined, name: undefined, click: clickHandler, object: (jQuery|HTMLElement|jQuery.fn.init)}}
+     * @returns {{init: undefined, name: undefined, click: clickHandler, element: (jQuery|HTMLElement|jQuery.fn.init)}}
      */
     colorByCB(menuItem, showCheck) {
 
-        const $e = $(createCheckbox(menuItem.label, showCheck))
+        const element = createCheckbox(menuItem.label, showCheck)
 
-        function clickHandler() {
-
-            if (menuItem.key === this.colorBy) {
-                this.colorBy = undefined
-                delete this.config.colorBy
-                this.trackView.repaintViews()
-            } else {
-                this.colorBy = menuItem.key
-                this.config.colorBy = menuItem.key
+        if (menuItem.key !== 'info') {
+            function clickHandler() {
+                const colorBy = ('none' === menuItem.key) ? undefined : menuItem.key
+                this.colorBy = colorBy
+                this.config.colorBy = colorBy
                 this.trackView.repaintViews()
             }
 
-        }
+            return {name: undefined, element, click: clickHandler, init: undefined}
+        } else {
+            function dialogPresentationHandler(ev) {
+                this.browser.inputDialog.present({
+                    label: 'Info field',
+                    value: '',
+                    callback: (infoField) => {
+                        if (infoField) {
+                            this.colorBy = infoField
+                            this._colorByItems.set(infoField, infoField)
+                        } else {
+                            this.colorBy = undefined
+                        }
+                        this.trackView.repaintViews()
+                    }
+                }, ev)
+            }
 
-        return {name: undefined, object: $e, click: clickHandler, init: undefined}
+            return {name: undefined, element, dialog: dialogPresentationHandler, init: undefined}
+        }
     }
 
     getState() {
 
         const config = super.getState()
-        if (this._color && typeof this._color !== "function") {
-            config.color = this._color
+        if (this.color && typeof this.color !== "function") {
+            config.color = this.color
         }
         return config
 
     }
 
+    /**
+     * Return the variant type for the given key, which should be a colorable attribute
+     * @param key
+     * @returns {any}
+     */
     getVariantColorTable(key) {
 
-        if (!this.colorTables) {
-            this.colorTables = new Map()
-        }
-
-        if (!this.colorTables.has(key)) {
+        if (this.colorTables.has(key)) {
+            return this.colorTables.get(key)
+        } else if (this.colorTables.has("*")) {
+            return this.colorTables.get("*")
+        } else {
             let tbl
             switch (key) {
                 case "SVTYPE" :
@@ -850,8 +925,8 @@ class VariantTrack extends TrackBase {
                     tbl = new PaletteColorTable("Set1")
             }
             this.colorTables.set(key, tbl)
+            return tbl
         }
-        return this.colorTables.get(key)
     }
 
     ///////////// CNVPytor converstion support follows ////////////////////////////////////////////////////////////
@@ -907,15 +982,29 @@ class VariantTrack extends TrackBase {
                 this.trackView.setTrackHeight(this.config.height || CNVPytorTrack.DEFAULT_TRACK_HEIGHT)
                 this.trackView.checkContentHeight()
                 this.trackView.updateViews()
-                this.trackView.track.autoHeight = false
-
 
             } finally {
                 this.trackView.stopSpinner()
             }
         }, 100)
-
     }
+
+    getFilterableAttributes() {
+        return this.header.INFO
+    }
+
+    /**
+     * Repack cached features, if any, for all viewports on this track
+     */
+    _repackCachedFeatures() {
+        for (let viewport of this.trackView.viewports) {
+            if (viewport.cachedFeatures) {
+                const maxRows = this.config.maxRows || Number.MAX_SAFE_INTEGER
+                packFeatures(viewport.cachedFeatures, maxRows, this._filter)
+            }
+        }
+    }
+
 }
 
 

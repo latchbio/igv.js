@@ -20,6 +20,7 @@ import ChromAliasDefaults from "./chromAliasDefaults.js"
 class Genome {
 
     #wgChromosomeNames
+    #aliasRecordCache = new Map()
 
     static async createGenome(options, browser) {
 
@@ -53,34 +54,35 @@ class Genome {
 
         if (this.chromosomes.size > 0) {
             this.chromosomeNames = Array.from(this.chromosomes.keys())
+        } else if(this.sequence.chromosomeNames) {
+            this.chromosomeNames = this.sequence.chromosomeNames    // Twobit files can supply chromosome names unless they use an external index
         }
 
         if (config.chromAliasBbURL) {
             this.chromAlias = new ChromAliasBB(config.chromAliasBbURL, Object.assign({}, config), this)
-            if(!this.chromosomeNames) {
+            if (!this.chromosomeNames) {
                 this.chromosomeNames = await this.chromAlias.getChromosomeNames()
             }
         } else if (config.aliasURL) {
             this.chromAlias = new ChromAliasFile(config.aliasURL, Object.assign({}, config), this)
         } else if (this.chromosomeNames) {
-            this.chromAlias = new ChromAliasDefaults(this.id, this.chromosomeNames);
+            this.chromAlias = new ChromAliasDefaults(this.id, this.chromosomeNames)
         }
 
         if (config.cytobandBbURL) {
             this.cytobandSource = new CytobandFileBB(config.cytobandBbURL, Object.assign({}, config), this)
-            if(!this.chromosomeNames) {
-                this.chromosomeNames = await this.cytobandSource.getChromosomeNames()
-            }
         } else if (config.cytobandURL) {
             this.cytobandSource = new CytobandFile(config.cytobandURL, Object.assign({}, config))
-            if(!this.chromosomeNames) {
-                this.chromosomeNames = await this.cytobandSource.getChromosomeNames()
-            }
-            if(this.chromosomes.size === 0) {
-                const c = await this.cytobandSource.getChromosomes()
-                for(let chromosome of c) {
-                    this.chromosomes.set(c.name, c)
-                }
+        }
+
+        // Last resort for chromosome information -- retrieve it from the cytoband source if supported
+        if (!this.chromosomeNames && this.cytobandSource && typeof this.cytobandSource.getChromosomeNames === 'function') {
+            this.chromosomeNames = await this.cytobandSource.getChromosomeNames()
+        }
+        if (this.chromosomes.size === 0 && this.cytobandSource && typeof this.cytobandSource.getChromosomes === 'function') {
+            const c = await this.cytobandSource.getChromosomes()
+            for (let chromosome of c) {
+                this.chromosomes.set(c.name, c)
             }
         }
 
@@ -96,6 +98,7 @@ class Genome {
             } else {
                 this.#wgChromosomeNames = trimSmallChromosomes(this.chromosomes)
             }
+            await this.chromAlias.preload(this.#wgChromosomeNames)
         }
 
         // Optionally create the psuedo chromosome "all" to support whole genome view
@@ -135,8 +138,10 @@ class Genome {
     getHomeChromosomeName() {
         if (this.showWholeGenomeView() && this.chromosomes.has("all")) {
             return "all"
-        } else {
+        } else if (this.chromosomeNames) {
             return this.chromosomeNames[0]
+        } else {
+
         }
     }
 
@@ -161,16 +166,14 @@ class Genome {
 
     async loadChromosome(chr) {
 
-        if (this.chromAlias) {
-           const chromAliasRecord = await this.chromAlias.search(chr)
-            if(chromAliasRecord) {
-                chr = chromAliasRecord.chr
-            }
+        const chromAliasRecord = await this.getAliasRecord(chr)
+        if (chromAliasRecord) {
+            chr = chromAliasRecord.chr
         }
 
         if (!this.chromosomes.has(chr)) {
             let chromosome
-            const  sequenceRecord = await this.sequence.getSequenceRecord(chr)
+            const sequenceRecord = await this.sequence.getSequenceRecord(chr)
             if (sequenceRecord) {
                 chromosome = new Chromosome(chr, 0, sequenceRecord.bpLength)
             }
@@ -180,16 +183,41 @@ class Genome {
 
         return this.chromosomes.get(chr)
     }
+
     async getAliasRecord(chr) {
+        if (this.#aliasRecordCache.has(chr)) {
+            return this.#aliasRecordCache.get(chr)
+        }
         if (this.chromAlias) {
-            return this.chromAlias.search(chr)
+            let aliasRecord = await this.chromAlias.search(chr)
+            if (!aliasRecord && chr !== chr.toLowerCase()) {
+                aliasRecord = await this.chromAlias.search(chr.toLowerCase())
+            }
+            if(aliasRecord) {
+                // Add some aliases for case insensitivy
+                const upper = aliasRecord.chr.toUpperCase()
+                const lower = aliasRecord.chr.toLowerCase()
+                const cap = aliasRecord.chr.charAt(0).toUpperCase() + aliasRecord.chr.slice(1)
+                if(aliasRecord.chr !== upper) {
+                    aliasRecord["_uppercase"] = upper
+                }
+                if(aliasRecord.chr !== lower) {
+                    aliasRecord["_lowercase"] = lower
+                }
+                if(aliasRecord.chr !== cap) {
+                    aliasRecord["_cap"] = cap
+                }
+            }
+            this.#aliasRecordCache.set(chr, aliasRecord)  // Set even if undefined to prevent recurrent searches
+            return aliasRecord
         }
     }
 
-    getCytobands(chr) {
+    async getCytobands(chr) {
         if (this.cytobandSource) {
             const chrName = this.getChromosomeName(chr)
-            return this.cytobandSource.getCytobands(chrName)
+            const cytos = await this.cytobandSource.getCytobands(chrName)
+            return cytos
         }
     }
 
@@ -198,7 +226,11 @@ class Genome {
     }
 
     get wgChromosomeNames() {
-        return this.#wgChromosomeNames ?  this.#wgChromosomeNames.slice() : undefined
+        return this.#wgChromosomeNames ? this.#wgChromosomeNames.slice() : undefined
+    }
+
+    get showChromosomeWidget() {
+        return this.config.showChromosomeWidget
     }
 
     /**
@@ -298,7 +330,7 @@ class Genome {
      * @param end
      */
     getSequenceInterval(chr, start, end) {
-        if(typeof this.sequence.getSequenceInterval === 'function') {
+        if (typeof this.sequence.getSequenceInterval === 'function') {
             return this.sequence.getSequenceInterval(chr, start, end)
         } else {
             return undefined
@@ -341,12 +373,12 @@ function isDigit(val) {
 function generateGenomeID(config) {
     if (config.id !== undefined) {
         return config.id
-    } else if (config.fastaURL && StringUtils.isString(config.fastaURL)) {
+    } else if (config.fastaURL && StringUtils.isString(config.fastaURL) && !config.fastaURL.startsWith("data:")) {
         return config.fastaURL
     } else if (config.fastaURL && config.fastaURL.name) {
         return config.fastaURL.name
     } else {
-        return ("0000" + (Math.random() * Math.pow(36, 4) << 0).toString(36)).slice(-4)
+        return ""
     }
 }
 

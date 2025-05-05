@@ -1,4 +1,10 @@
 
+function createElementWithString(htmlString){
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlString;
+    return tempDiv.firstElementChild;
+}
+
 function div(options) {
     return create("div", options);
 }
@@ -28,15 +34,11 @@ function hide(elem) {
 }
 
 function show(elem) {
-    const currentDisplay = getComputedStyle(elem).display;
-    if (currentDisplay === "none") {
+    //const currentDisplay = getComputedStyle(elem).display;
+    //if (currentDisplay === "none") {
         const d = elem._initialDisplay || "block";
         elem.style.display = d;
-    }
-}
-
-function hideAll(selector) {
-    document.querySelectorAll(selector).forEach(elem => { hide(elem) });
+   // }
 }
 
 function empty(elem) {
@@ -113,5 +115,5 @@ function translateMouseCoordinates(event, domElement) {
 
 }
 
-export { create, div, hide, show, offset, hideAll, empty, pageCoordinates, relativeDOMBBox,
+export { createElementWithString, create, div, hide, show, offset, empty, pageCoordinates, relativeDOMBBox,
     applyStyle, guid, translateMouseCoordinates }

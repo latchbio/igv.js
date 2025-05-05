@@ -1,91 +1,54 @@
 import NavbarButton from "./navbarButton.js"
-import {multiTrackSelectExclusionTypes} from './menuUtils.js'
 import {multiSelectImage, multiSelectImageHover} from "./navbarIcons/multiSelect.js"
-import { buttonLabel } from "./navbarIcons/buttonLabel.js"
-
-let ENABLE_MULTI_TRACK_SELECTION = false
+import {buttonLabel} from "./navbarIcons/buttonLabel.js"
 
 class MultiTrackSelectButton extends NavbarButton {
-    constructor(browser, parent) {
 
-        super(browser, parent, 'Select Tracks', buttonLabel, multiSelectImage, multiSelectImageHover, ENABLE_MULTI_TRACK_SELECTION)
+    constructor(parent, browser, navbar, enableMultiTrackSelection) {
 
+        super(parent, browser, 'Select Tracks', buttonLabel, multiSelectImage, multiSelectImageHover, false)
+
+        this.navbar = navbar
+        this.enableMultiTrackSelection = false  // Initial state
         this.button.addEventListener('mouseenter', event => {
-            if (false === ENABLE_MULTI_TRACK_SELECTION) {
+            if (false === enableMultiTrackSelection) {
                 this.setState(true)
             }
         })
 
         this.button.addEventListener('mouseleave', event => {
-            if (false === ENABLE_MULTI_TRACK_SELECTION) {
+            if (false === enableMultiTrackSelection) {
                 this.setState(false)
             }
         })
 
         const mouseClickHandler = () => {
-            ENABLE_MULTI_TRACK_SELECTION = !ENABLE_MULTI_TRACK_SELECTION
-            for (const trackView of this.browser.trackViews) {
-                if (false === multiTrackSelectExclusionTypes.has(trackView.track.type)) {
-                    setMultiTrackSelectionState(trackView, trackView.axis, ENABLE_MULTI_TRACK_SELECTION)
-                }
-            }
-            this.setState(ENABLE_MULTI_TRACK_SELECTION)
-
-            // If ENABLE_MULTI_TRACK_SELECTION is false hide Overlay button
-            if (false === ENABLE_MULTI_TRACK_SELECTION) {
-                this.browser.overlayTrackButton.setVisibility(false)
-            }
+            // Toggle the selection state
+            this.setMultiTrackSelection(!this.enableMultiTrackSelection)
         }
 
         this.boundMouseClickHandler = mouseClickHandler.bind(this)
 
         this.button.addEventListener('click', this.boundMouseClickHandler)
 
-        this.setVisibility(true)
-
     }
-}
 
-function setMultiTrackSelectionState(trackView, axis, doEnableMultiSelection) {
+    setMultiTrackSelection(enableMultiTrackSelection) {
 
-    const container = axis.querySelector('div')
+        this.enableMultiTrackSelection = enableMultiTrackSelection
+        this.setState(this.enableMultiTrackSelection)
 
-    if (true === doEnableMultiSelection) {
-        container.style.display = 'grid'
-    } else {
-
-        trackView.track.isMultiSelection = false
-
-        // if (trackView.track.autoscaleGroup) {
-        //     trackView.track.autoscaleGroup = undefined
-        // }
-
-        const trackSelectInput =  container.querySelector('[name=track-select]')
-        trackSelectInput.checked = false
-
-        if (trackView.dragHandle) {
-            setDragHandleSelectionState(trackView, trackView.dragHandle, false)
+        // If enableMultiTrackSelection is false hide the Overly button
+        if (false === this.enableMultiTrackSelection) {
+            this.navbar.overlayTrackButton.setVisibility(false)
         }
 
-        container.style.display = 'none'
-    }
+        for (const trackView of this.browser.trackViews) {
+            trackView.enableTrackSelection(enableMultiTrackSelection)
+        }
 
-
-}
-
-function setDragHandleSelectionState(trackView, dragHandle, isSelected) {
-
-    if (isSelected) {
-        dragHandle.classList.remove('igv-track-drag-handle-color')
-        dragHandle.classList.remove('igv-track-drag-handle-hover-color')
-        dragHandle.classList.add('igv-track-drag-handle-selected-color')
-    } else {
-        dragHandle.classList.remove('igv-track-drag-handle-hover-color')
-        dragHandle.classList.remove('igv-track-drag-handle-selected-color')
-        dragHandle.classList.add('igv-track-drag-handle-color')
     }
 
 }
 
-export { ENABLE_MULTI_TRACK_SELECTION, setMultiTrackSelectionState, setDragHandleSelectionState }
 export default MultiTrackSelectButton

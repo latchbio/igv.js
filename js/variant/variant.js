@@ -31,6 +31,8 @@ import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
  * @param tokens
  */
 
+const STANDARD_FIELDS = new Map([["REF", "referenceBases"], ["ALT", "alternateBases"], ["QUAL", "quality"], ["FILTER", "filter"]])
+
 
 class Variant {
 
@@ -44,7 +46,7 @@ class Variant {
         this.filter = tokens[6]
         this.info = {}
         const infoStr = tokens[7]
-        if (infoStr) {
+        if (infoStr && infoStr !== '.') {
             for (let elem of infoStr.split(';')) {
                 var element = elem.split('=')
                 this.info[element[0]] = element[1]
@@ -52,6 +54,15 @@ class Variant {
         }
         this.init()
     }
+
+
+    getAttributeValue(key) {
+        if (STANDARD_FIELDS.has(key)) {
+            key = STANDARD_FIELDS.get(key)
+        }
+        return this.hasOwnProperty(key) ? this[key] : this.info[key]
+    }
+
 
     init() {
 
@@ -195,9 +206,10 @@ class Variant {
             }
         }
 
-        if (this.info) {
+        const infoKeys = Object.keys(this.info)
+        if (this.info && infoKeys.length > 0) {
             fields.push({html: '<hr style="border-top: dotted 1px;border-color: #c9c3ba" />'})
-            for (let key of Object.keys(this.info)) {
+            for (let key of infoKeys) {
                 fields.push({name: key, value: arrayToString(decodeURIComponent(this.info[key]))})
             }
         }
@@ -217,6 +229,80 @@ class Variant {
         return !("." === this.filter || "PASS" === this.filter)
     }
 
+    alleleFreq() {
+        return this.info ? this.info["AF"] : undefined
+    }
+}
+
+/**
+ * Represents the "other end" of an SV which specifies the breakpoint as CHR2 and END info fields.
+ */
+class SVComplement {
+
+    constructor(v) {
+        this.mate = v
+        this.chr = v.info.CHR2
+        this.pos = Number.parseInt(v.info.END)
+        this.start = this.pos - 1
+        this.end = this.pos
+    }
+
+    get info() {
+        return this.mate.info
+    }
+
+    get names() {
+        return this.mate.names
+    }
+
+    get referenceBases() {
+        return this.mate.referenceBases
+    }
+
+    get alternateBases() {
+        return this.mate.alternateBases
+    }
+
+    get quality() {
+        return this.mate.quality
+    }
+
+    get filter() {
+        return this.mate.filter
+    }
+
+    get calls() {
+        return this.mate.calls
+    }
+
+    getAttributeValue(key) {
+        return this.mate.getAttributeValue(key)
+    }
+
+    getInfo(tag) {
+        this.mate.getInfo(tag)
+    }
+
+    isFiltered() {
+        return this.mate.isFiltered()
+    }
+
+    alleleFreq() {
+        return this.mate.alleleFreq()
+    }
+
+    popupData(genomicLocation, genomeId) {
+        const popupData = []
+
+        popupData.push("SV Breakpoint")
+        popupData.push({name: 'Chr', value: this.chr})
+        popupData.push({name: 'Pos', value: `${StringUtils.numberFormatter(this.pos)}`})
+        popupData.push({html: '<hr style="border-top: dotted 1px;border-color: #c9c3ba" />'})
+        popupData.push("SV")
+        popupData.push(...this.mate.popupData(genomicLocation, genomeId))
+
+        return popupData
+    }
 }
 
 
@@ -332,9 +418,9 @@ class Call {
         if (infoKeys.length) {
             popupData.push('<hr/>')
         }
-        infoKeys.forEach(function (key) {
+        for(let key of infoKeys) {
             popupData.push({name: key, value: decodeURIComponent(this.info[key])})
-        })
+        }
 
         return popupData
     }
@@ -397,4 +483,4 @@ function arrayToString(value, delim) {
 }
 
 
-export {Variant, Call}
+export {Variant, Call, SVComplement}

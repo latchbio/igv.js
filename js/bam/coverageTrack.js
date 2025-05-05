@@ -9,6 +9,7 @@ class CoverageTrack  {
 
 
     constructor(config, parent) {
+        this.featureType = 'numeric'
         this.parent = parent
         this.featureSource = parent.featureSource
 
@@ -72,7 +73,8 @@ class CoverageTrack  {
             strokeStyle: color
         })
 
-        const w = Math.max(1, Math.ceil(1.0 / bpPerPixel))
+        const wFactor =0.99
+        const w =  Math.max(1, 1.0 / bpPerPixel)
         for (let i = 0, len = coverageMap.coverage.length; i < len; i++) {
 
             const bp = (coverageMap.bpStart + i)
@@ -82,9 +84,9 @@ class CoverageTrack  {
             const item = coverageMap.coverage[i]
             if (!item) continue
 
-            const h = Math.round((item.total / this.dataRange.max) * this.height)
+            const h = (item.total / this.dataRange.max) * this.height
             const y = this.height - h
-            const x = Math.floor((bp - bpStart) / bpPerPixel)
+            const x = (bp - bpStart) / bpPerPixel
 
 
             // IGVGraphics.setProperties(ctx, {fillStyle: "rgba(0, 200, 0, 0.25)", strokeStyle: "rgba(0, 200, 0, 0.25)" });
@@ -108,10 +110,8 @@ class CoverageTrack  {
 
                 const refBase = sequence[i]
 
-                if ("basemod2" === this.parent.colorBy || "basemod" === this.parent.colorBy) {
-                    //context, pX, pBottom, dX, barHeight, pos, alignmentContainer
-                    const threshold = 0.5   // TODD - parameter
-                    drawModifications(ctx, x, this.height, w, h, bp, alignmentContainer, this.parent.colorBy, threshold)
+                if (this.parent.colorBy && this.parent.colorBy.startsWith("basemod")) {
+                    drawModifications(ctx, x, this.height, w, h, bp, alignmentContainer, this.parent.colorBy, this.parent.baseModificationThreshold)
 
                 } else if (item.isMismatch(refBase)) {
                     IGVGraphics.setProperties(ctx, {fillStyle: nucleotideColors[refBase]})
@@ -142,14 +142,21 @@ class CoverageTrack  {
         const genomicLocation = Math.floor(clickState.genomicLocation)
         const coverageMap = features.coverageMap
         const coverageMapIndex = Math.floor(genomicLocation - coverageMap.bpStart)
-        return coverageMap.coverage[coverageMapIndex]
+        const coverage = coverageMap.coverage[coverageMapIndex]
+        if(coverage) {
+            return {
+                coverage: coverage,
+                baseModCounts: features.baseModCounts,
+                hoverText: () => coverageMap.coverage[coverageMapIndex].hoverText()
+            }
+        }
     }
 
     popupData(clickState) {
 
         const nameValues = []
 
-        const coverage = this.getClickedObject(clickState)
+        const {coverage, baseModCounts} = this.getClickedObject(clickState)
         if (coverage) {
             const genomicLocation = Math.floor(clickState.genomicLocation)
             const referenceFrame = clickState.viewport.referenceFrame
@@ -186,6 +193,13 @@ class CoverageTrack  {
             nameValues.push('<HR/>')
             nameValues.push({name: 'DEL', value: coverage.del.toString()})
             nameValues.push({name: 'INS', value: coverage.ins.toString()})
+
+            if(baseModCounts) {
+                nameValues.push('<hr/>');
+                nameValues.push(...baseModCounts.popupData(genomicLocation, this.parent.colorBy))
+
+            }
+
         }
 
         return nameValues

@@ -5,13 +5,13 @@ import BWSource from "../bigwig/bwSource.js"
 import IGVGraphics from "../igv-canvas.js"
 import paintAxis from "../util/paintAxis.js"
 import {IGVColor, StringUtils} from "../../node_modules/igv-utils/src/index.js"
-import $ from "../vendor/jquery-3.3.1.slim.js"
 import {createCheckbox} from "../igv-icons.js"
-
-const DEFAULT_COLOR = 'rgb(150, 150, 150)'
-
+import {ColorScaleFactory} from "../util/colorScale.js"
+import ColorScaleEditor from "../ui/components/colorScaleEditor.js"
 
 class WigTrack extends TrackBase {
+
+    static defaultColor = 'rgb(150, 150, 150)'
 
     static defaults = {
         height: 50,
@@ -23,7 +23,8 @@ class WigTrack extends TrackBase {
         scaleFactor: undefined,
         overflowColor: `rgb(255, 32, 255)`,
         baselineColor: 'lightGray',
-        summarize: true
+        summarize: true,
+        visibilityWindow: undefined
     }
 
     constructor(config, browser) {
@@ -37,7 +38,7 @@ class WigTrack extends TrackBase {
         this.type = "wig"
         this.featureType = 'numeric'
         this.resolutionAware = true
-        this.paintAxis = paintAxis
+        this._paintAxis = paintAxis.bind(this)
 
         const format = config.format ? config.format.toLowerCase() : config.format
         if (config.featureSource) {
@@ -51,7 +52,6 @@ class WigTrack extends TrackBase {
             this.featureSource = FeatureSource(config, this.browser.genome)
         }
 
-
         // Override autoscale default
         if (config.max === undefined || config.autoscale === true) {
             this.autoscale = true
@@ -61,12 +61,39 @@ class WigTrack extends TrackBase {
                 max: config.max
             }
         }
+
+        if (config.colorScale) {
+            this._colorScale = ColorScaleFactory.fromJson(config.colorScale)
+        }
+
+        // Override default height for heatmaps
+        if ("heatmap" === config.graphType && !config.height) {
+            this.height = 20
+        }
     }
 
     async postInit() {
         const header = await this.getHeader()
         if (this.disposed) return   // This track was removed during async load
         if (header) this.setTrackProperties(header)
+
+        this._initialColor = this.color || this.constructor.defaultColor
+        this._initialAltColor = this.altColor || this.constructor.defaultColor
+
+    }
+
+    get supportsWholeGenome() {
+        return !this.config.indexURL && this.config.supportsWholeGenome !== false
+    }
+
+    get paintAxis() {
+        // Supply do-nothing implementation for heatmaps
+        return "heatmap" === this.graphType ? () => {
+        } : this._paintAxis
+    }
+
+    get colorScale() {
+        return this._colorScale
     }
 
     async getFeatures(chr, start, end, bpPerPixel) {
@@ -106,18 +133,30 @@ class WigTrack extends TrackBase {
     menuItemList() {
         const items = []
 
-        if (this.flipAxis !== undefined) {
+        if ('heatmap' === this.graphType) {
             items.push('<hr>')
-
-            function click() {
-                this.flipAxis = !this.flipAxis
-                this.trackView.repaintViews()
-            }
-
-            items.push({label: 'Flip y-axis', click})
+            items.push({
+                label: 'Set color scale', click: function () {
+                    ColorScaleEditor.open(this.colorScale, this.browser.columnContainer, (colorScale) => {
+                        this._colorScale = colorScale
+                        this.trackView.repaintViews()
+                    })
+                }
+            })
+        } else if (this.flipAxis !== undefined) {
+            items.push('<hr>')
+            items.push({
+                label: 'Flip y-axis',
+                click: function () {
+                    this.flipAxis = !this.flipAxis
+                    this.trackView.repaintViews()
+                }
+            })
         }
 
-        if(this.featureSource.windowFunctions) {
+        items.push(...this.graphTypeItems())
+
+        if (this.featureSource.windowFunctions) {
             items.push(...this.wigSummarizationItems())
         }
 
@@ -134,19 +173,38 @@ class WigTrack extends TrackBase {
         menuItems.push('<hr/>')
         menuItems.push("<div>Windowing function</div>")
         for (const wf of windowFunctions) {
-            const object = $(createCheckbox(wf, this.windowFunction === wf))
 
             function clickHandler() {
                 this.windowFunction = wf
                 this.trackView.updateViews()
             }
 
-            menuItems.push({object, click: clickHandler})
+            menuItems.push({element:createCheckbox(wf, this.windowFunction === wf), click: clickHandler})
         }
 
         return menuItems
     }
 
+    graphTypeItems() {
+
+        const graphType = ['bar', 'line', 'points', 'heatmap']
+
+        const menuItems = []
+        menuItems.push('<hr/>')
+        menuItems.push("<div>Graph type</div>")
+
+        for (const gt of graphType) {
+
+            function clickHandler() {
+                this.graphType = gt
+                this.trackView.repaintViews()
+            }
+
+            menuItems.push({element:createCheckbox(gt, this.graphType === gt), click: clickHandler})
+        }
+
+        return menuItems
+    }
 
     async getHeader() {
 
@@ -158,7 +216,9 @@ class WigTrack extends TrackBase {
 
     // TODO: refactor to igvUtils.js
     getScaleFactor(min, max, height, logScale) {
-        const scale = logScale ? height / (Math.log10(max + 1) - (min <= 0 ? 0 : Math.log10(min + 1))) : height / (max - min)
+        const minValue = (logScale === true) ? ((min < 0) ? -Math.log10(Math.abs(min) + 1) : Math.log10(Math.abs(min) + 1)) : min
+        const maxValue = (logScale === true) ? Math.log10(Math.abs(max) + 1) : max
+        const scale = height / (maxValue - minValue)
         return scale
     }
 
@@ -169,11 +229,10 @@ class WigTrack extends TrackBase {
     computeYPixelValueInLogScale(yValue, yScaleFactor) {
         let maxValue = this.dataRange.max
         let minValue = this.dataRange.min
-        if (maxValue <= 0) return 0 // TODO:
-        if (minValue <= -1) minValue = 0
-        minValue = (minValue <= 0) ? 0 : Math.log10(minValue + 1)
-        maxValue = Math.log10(maxValue + 1)
-        yValue = Math.log10(yValue + 1)
+        minValue = (minValue < 0) ? -Math.log10(Math.abs(minValue) + 1) : Math.log10(Math.abs(minValue) + 1)
+        maxValue = (maxValue < 0) ? -Math.log10(Math.abs(maxValue) + 1) : Math.log10(Math.abs(maxValue) + 1)
+
+        yValue = (yValue < 0) ? -Math.log10(Math.abs(yValue) + 1) : Math.log10(yValue + 1)
         return ((this.flipAxis ? (yValue - minValue) : (maxValue - yValue)) * yScaleFactor)
     }
 
@@ -184,12 +243,10 @@ class WigTrack extends TrackBase {
         const bpPerPixel = options.bpPerPixel
         const bpStart = options.bpStart
         const pixelWidth = options.pixelWidth
-        const pixelHeight = options.pixelHeight
+        const pixelHeight = options.pixelHeight - 1
         const bpEnd = bpStart + pixelWidth * bpPerPixel + 1
-        const posColor = this.color || DEFAULT_COLOR
 
-        let lastNegValue = 1
-        const scaleFactor = this.getScaleFactor(this.dataRange.min, this.dataRange.max, options.pixelHeight, this.logScale)
+        const scaleFactor = this.getScaleFactor(this.dataRange.min, this.dataRange.max, pixelHeight, this.logScale)
         const yScale = (yValue) => this.logScale
             ? this.computeYPixelValueInLogScale(yValue, scaleFactor)
             : this.computeYPixelValue(yValue, scaleFactor)
@@ -212,7 +269,7 @@ class WigTrack extends TrackBase {
                     if (f.start > bpEnd) break
 
                     const x = (f.start - bpStart) / bpPerPixel
-                    if (isNaN(x)) continue
+                    if (Number.isNaN(x)) continue
 
                     let y = yScale(f.value)
 
@@ -240,14 +297,24 @@ class WigTrack extends TrackBase {
                             IGVGraphics.fillCircle(ctx, px, pixelHeight - pointSize / 2, pointSize / 2, 3, {fillStyle: this.overflowColor})
                         }
 
-                    } else {
 
+                    } else if (this.graphType === "heatmap") {
+                        if (!this._colorScale) {
+                            // Create a default color scale.
+                            this._colorScale = this.dataRange.min < 0 && this.dataRange.max > 0 ?
+                                ColorScaleFactory.defaultDivergingScale(this.dataRange.min, 0, this.dataRange.max) :
+                                ColorScaleFactory.defaultGradientScale(this.dataRange.min, this.dataRange.max)
+                        }
+                        const color = this._colorScale.getColor(f.value)
+                        IGVGraphics.fillRect(ctx, x, 0, width, pixelHeight, {fillStyle: color})
+                    } else {
+                        // Default graph type (bar)
                         const height = Math.min(pixelHeight, y - y0)
                         IGVGraphics.fillRect(ctx, x, y0, width, height, {fillStyle: color})
                         if (f.value > this.dataRange.max) {
                             IGVGraphics.fillRect(ctx, x, 0, width, 3, {fillStyle: this.overflowColor})
                         } else if (f.value < this.dataRange.min) {
-                            IGVGraphics.fillRect(ctx, x, pixelHeight - 3, width, 3, {fillStyle: this.overflowColor})
+                            IGVGraphics.fillRect(ctx, x, pixelHeight - 2, width, 3, {fillStyle: this.overflowColor})
                         }
 
                     }
@@ -257,8 +324,12 @@ class WigTrack extends TrackBase {
 
                 // If the track includes negative values draw a baseline
                 if (this.dataRange.min < 0) {
-                    const ratio = this.dataRange.max / (this.dataRange.max - this.dataRange.min)
-                    const basepx = this.flipAxis ? (1 - ratio) * options.pixelHeight : ratio * options.pixelHeight
+                    let maxValue = this.dataRange.max
+                    let minValue = this.dataRange.min
+                    minValue = (this.logScale === true) ? ((minValue < 0) ? -Math.log10(Math.abs(minValue) + 1) : Math.log10(Math.abs(minValue) + 1)) : minValue
+                    maxValue = (this.logScale === true) ? ((maxValue < 0) ? -Math.log10(Math.abs(maxValue) + 1) : Math.log10(Math.abs(maxValue) + 1)) : maxValue
+                    const ratio = maxValue / (maxValue - minValue)
+                    const basepx = this.flipAxis ? (1 - ratio) * pixelHeight : ratio * pixelHeight
                     IGVGraphics.strokeLine(ctx, 0, basepx, options.pixelWidth, basepx, {strokeStyle: this.baselineColor})
                 }
             }
@@ -330,10 +401,6 @@ class WigTrack extends TrackBase {
         }
     }
 
-    get supportsWholeGenome() {
-        return !this.config.indexURL && this.config.supportsWholeGenome !== false
-    }
-
     /**
      * Return color for feature.
      * @param feature
@@ -341,8 +408,17 @@ class WigTrack extends TrackBase {
      */
 
     getColorForFeature(f) {
-        let c = (f.value < 0 && this.altColor) ? this.altColor : this.color || DEFAULT_COLOR
+        let c = (f.value < 0 && this.altColor) ? this.altColor : this.color || WigTrack.defaultColor
         return (typeof c === "function") ? c(f.value) : c
+    }
+
+
+    getState() {
+        const state = super.getState()
+        if (this._colorScale) {
+            state.colorScale = this._colorScale.toJson()
+        }
+        return state
     }
 
     /**
@@ -365,7 +441,7 @@ class WigTrack extends TrackBase {
  */
 function summarizeData(features, startBP, bpPerPixel, windowFunction = "mean") {
 
-    if (bpPerPixel <= 1 || !features || features.length === 0) {
+    if (bpPerPixel <= 1 || !features || features.length === 0 || windowFunction === "none") {
         return features
     }
 
@@ -410,7 +486,7 @@ function summarizeData(features, startBP, bpPerPixel, windowFunction = "mean") {
 
         if (!currentBinData || endBin > currentBinData.bin) {
 
-            if(currentBinData) {
+            if (currentBinData) {
                 finishBin(currentBinData)
             }
 
@@ -424,7 +500,7 @@ function summarizeData(features, startBP, bpPerPixel, windowFunction = "mean") {
         }
 
     }
-    if(currentBinData) {
+    if (currentBinData) {
         finishBin(currentBinData)
     }
 

@@ -1,4 +1,4 @@
-import gmodCRAM from "../vendor/cram-bundle.js"
+import gmodCRAM from "./cram-bundle.js"
 import AlignmentContainer from "../bam/alignmentContainer.js"
 import BamUtils from "../bam/bamUtils.js"
 import BamAlignment from "../bam/bamAlignment.js"
@@ -30,6 +30,7 @@ class CramReader {
 
         this.cramFile = new gmodCRAM.CramFile({
             filehandle: config.fileHandle ? config.fileHandle : new FileHandler(config.url, config),
+            //url: config.url,
             seqFetch: config.seqFetch || seqFetch.bind(this),
             checkSequenceMD5: config.checkSequenceMD5 !== undefined ? config.checkSequenceMD5 : true
         })
@@ -38,6 +39,7 @@ class CramReader {
         this.indexedCramFile = new gmodCRAM.IndexedCramFile({
             cram: this.cramFile,
             index: new gmodCRAM.CraiIndex({
+                //url: config.indexURL
                 filehandle: indexFileHandle
             }),
             fetchSizeLimit: config.fetchSizeLimit || 1000000000

@@ -1,26 +1,30 @@
 import * as DOMUtils from "../ui/utils/dom-utils.js"
 import ROISet, {screenCoordinates} from './ROISet.js'
-import Popover from "../ui/popover.js"
+import {getElementVerticalDimension, getFilename} from "../util/igvUtils.js"
+import {inferFileFormat} from "../util/fileFormatUtils.js"
+import ROIMenu from "./ROIMenu.js"
+import ROITable from "./ROITable.js"
 
 class ROIManager {
 
-    constructor(browser, roiMenu, roiTable, top, roiSets) {
+    constructor(browser) {
 
         this.browser = browser
-        this.roiMenu = roiMenu
-        this.roiTable = roiTable
-        this.top = top
-        this.roiSets = roiSets || []
+        this.roiMenu = new ROIMenu(browser, browser.columnContainer)
+        this.roiTable = new ROITable(browser, browser.columnContainer)
+        this.top = 0
+        this.roiSets = []
+        this.showOverlays = true
+
         this.boundLocusChangeHandler = locusChangeHandler.bind(this)
         browser.on('locuschange', this.boundLocusChangeHandler)
 
     }
 
-    async initialize() {
+    async reset() {
 
         if (this.roiSets.length > 0) {
-            this.browser.doShowROITableButton = true
-            this.browser.roiTableControl.setVisibility(this.browser.doShowROITableButton)
+            this.browser.roiTableControl.setVisibility(true)
         }
 
         const promises = this.roiSets.map(roiSet => this.renderROISet({
@@ -37,21 +41,46 @@ class ROIManager {
         this.roiTable.renderTable(records)
 
         if (this.roiSets.length > 0) {
-            const isVisible = this.roiSets[ 0 ].isVisible
-            this.roiTable.setROIVisibility(isVisible)
+            this.setOverlayVisibility(this.showOverlays)
         }
+    }
 
+    setOverlayVisibility(isVisible) {
+
+        const elements = this.browser.columnContainer.querySelectorAll('.igv-roi-region')
+        for (let i = 0; i < elements.length; i++) {
+            const el = elements[i]
+            if (isVisible) {
+                // Restore element background color to its original value
+                el.style.backgroundColor = el.dataset.color
+            } else {
+                // Hide overlay by setting its transparency to zero.  A bit of an unusual method to hide an element.
+                el.style.backgroundColor = `rgba(0, 0, 0, 0)`
+            }
+        }
+        this.roiTable.toggleROIButton.textContent = false === isVisible ? 'Show Overlays' : 'Hide Overlays'
     }
 
     async loadROI(config, genome) {
 
         const configs = Array.isArray(config) ? config : [config]
 
-        for (let c of configs) {
-            this.roiSets.push(new ROISet(c, genome))
+        // Backward compatibility hack
+        if (configs.length > 0 && configs[0].isVisible === false) {
+            this.showOverlays = false
         }
 
-        await this.initialize()
+        for (let config of configs) {
+            if (!config.name && config.url) {
+                config.name = await getFilename(config.url)
+            }
+            if (config.url && !config.format) {
+                config.format = await inferFileFormat(config)
+            }
+            this.roiSets.push(new ROISet(config, genome))
+        }
+
+        await this.reset()
 
     }
 
@@ -77,7 +106,7 @@ class ROIManager {
         const records = []
 
         for (let roiSet of this.roiSets) {
-            const setName = roiSet.isUserDefined ? '' : (roiSet.name || '')
+            const setName = (roiSet.name || '')
             const allFeatures = await roiSet.getAllFeatures()
             for (let chr of Object.keys(allFeatures)) {
                 for (let feature of allFeatures[chr]) {
@@ -102,6 +131,10 @@ class ROIManager {
         this.roiTable.dismiss()
     }
 
+    roiTableIsVisible() {
+        return this.roiTable.isVisible()
+    }
+
     async updateUserDefinedROISet(feature) {
 
         let userDefinedROISet = await this.getUserDefinedROISet()
@@ -112,9 +145,7 @@ class ROIManager {
 
         userDefinedROISet.addFeature(feature)
 
-        if (false === this.browser.doShowROITableButton) {
-            this.setROITableButtonVisibility(true)
-        }
+        this.setROITableButtonVisibility(true)
 
         await this.renderROISet({browser: this.browser, pixelTop: this.top, roiSet: userDefinedROISet})
 
@@ -123,18 +154,12 @@ class ROIManager {
     }
 
     setROITableButtonVisibility(isVisible) {
-        this.browser.doShowROITableButton = isVisible
-        this.browser.roiTableControl.setVisibility(this.browser.doShowROITableButton)
+        this.browser.roiTableControl.setVisibility(isVisible)
     }
 
     toggleROIs() {
-
-        const isVisible = !(this.roiSets[ 0 ].isVisible)
-        this.roiTable.setROIVisibility(isVisible)
-
-        for (const roiSet of this.roiSets) {
-            roiSet.isVisible = isVisible
-        }
+        this.showOverlays = !this.showOverlays
+        this.setOverlayVisibility(this.showOverlays)
     }
 
     async renderAllROISets() {
@@ -166,7 +191,6 @@ class ROIManager {
             if (features) {
 
                 for (let feature of features) {
-
                     const regionKey = createRegionKey(chr, feature.start, feature.end)
 
                     const {
@@ -182,7 +206,7 @@ class ROIManager {
                         el.style.width = `${pixelWidth}px`
 
                     } else {
-                        const element = this.createRegionElement(browser.columnContainer, pixelTop, pixelX, pixelWidth, roiSet, regionKey, feature.name)
+                        const element = this.createRegionElement(browser.columnContainer, pixelTop, pixelX, pixelWidth, roiSet, regionKey, feature)
                         columns[i].appendChild(element)
                     }
                 }
@@ -190,72 +214,105 @@ class ROIManager {
         }
     }
 
-    createRegionElement(columnContainer, pixelTop, pixelX, pixelWidth, roiSet, regionKey, name) {
+    createRegionElement(columnContainer, pixelTop, pixelX, pixelWidth, roiSet, regionKey, feature) {
 
         const regionElement = DOMUtils.div({class: 'igv-roi-region'})
 
         regionElement.style.top = `${pixelTop}px`
         regionElement.style.left = `${pixelX}px`
         regionElement.style.width = `${pixelWidth}px`
-        regionElement.style.backgroundColor = roiSet.color
+
+        const marginTop = `${this.getROIRegionTopMargin()}px`
+        regionElement.style.marginTop = marginTop
+
         regionElement.dataset.color = roiSet.color
         regionElement.dataset.region = regionKey
+
+        if (this.showOverlays) {
+            // Restore element background color to its original value
+            regionElement.style.backgroundColor = roiSet.color
+        } else {
+            // Hide overlay by setting its transparency to zero.  A bit of an unusual method to hide an element.
+            regionElement.style.backgroundColor = `rgba(0, 0, 0, 0)`
+        }
 
         const header = DOMUtils.div()
         regionElement.appendChild(header)
 
         header.style.backgroundColor = roiSet.headerColor
 
-        if (true === roiSet.isUserDefined) {
-            header.addEventListener('click', event => {
-                event.preventDefault()
-                event.stopPropagation()
+        header.addEventListener('click', event => {
+            event.preventDefault()
+            event.stopPropagation()
 
-                const {x, y} = DOMUtils.translateMouseCoordinates(event, columnContainer)
-                this.roiMenu.present(x, y, this, columnContainer, regionElement)
-            })
-        } else if (name) {
-            header.addEventListener('click', event => {
-                event.preventDefault()
-                event.stopPropagation()
-                if (this.popover) {
-                    this.popover.dispose()
-                }
-                this.popover = new Popover(columnContainer, true, roiSet.name, undefined)
-                this.popover.presentContentWithEvent(event, name)
-            })
-        } else {
-            header.style.pointerEvents = 'none'
-        }
+            const {x, y} = DOMUtils.translateMouseCoordinates(event, columnContainer)
+            this.roiMenu.present(feature, roiSet, event, this, columnContainer, regionElement)
+        })
 
         return regionElement
     }
 
-    renderSVGContext(context, {deltaX, deltaY}) {
-
-        for (const regionElement of document.querySelectorAll('.igv-roi-region')) {
-
-            // body
-            const { x, y, width, height } = regionElement.getBoundingClientRect()
-            context.fillStyle = regionElement.style.backgroundColor
-            context.fillRect(x-deltaX, y+deltaY, width, height)
-
-            // header
-            const header = regionElement.querySelector('div')
-            const { x:xx, y:yy, width:ww, height:hh } = header.getBoundingClientRect()
-            context.fillStyle = header.style.backgroundColor
-            context.fillRect(xx-deltaX, yy+deltaY, ww, hh)
+    updateROIRegionPositions() {
+        const top = `${this.getROIRegionTopMargin()}px`
+        const columns = this.browser.columnContainer.querySelectorAll('.igv-column')
+        for (let i = 0; i < columns.length; i++) {
+            const elements = columns[i].querySelectorAll('.igv-roi-region')
+            for (let j = 0; j < elements.length; j++) {
+                elements[j].style.marginTop = top
+            }
         }
     }
 
-    async getUserDefinedROISet() {
+    getROIRegionTopMargin() {
+
+        const browser = this.browser
+
+        const tracks = browser.findTracks(track => new Set(['ideogram', 'ruler']).has(track.type))
+
+        const [rectA, rectB] = tracks
+            .map(track => track.trackView.viewports[0].viewportElement)
+            .map(element => getElementVerticalDimension(element))
+
+        //Covers cases in which ruler and/or ideogram are hidden
+        const heightA = rectA ? rectA.height : 0
+        const heightB = rectB ? rectB.height : 0
+
+        const fudge = -0.5
+        const roiRegionMargin = heightA + heightB + fudge
+
+        return roiRegionMargin
+    }
+
+    renderSVGContext(columnContainer, context, {deltaX, deltaY}) {
+
+        for (const regionElement of columnContainer.querySelectorAll('.igv-roi-region')) {
+
+            // body
+            const {x, y, width, height} = regionElement.getBoundingClientRect()
+            context.fillStyle = regionElement.style.backgroundColor
+            context.fillRect(x - deltaX, y + deltaY, width, height)
+
+            // header
+            const header = regionElement.querySelector('div')
+            const {x: xx, y: yy, width: ww, height: hh} = header.getBoundingClientRect()
+            context.fillStyle = header.style.backgroundColor
+            context.fillRect(xx - deltaX, yy + deltaY, ww, hh)
+        }
+    }
+
+    getUserDefinedROISet() {
         return this.roiSets.find(roiSet => true === roiSet.isUserDefined)
+    }
+
+    deleteUserDefinedROISet() {
+        this.roiSets = this.roiSets.filter(roiSet => roiSet.isUserDefined !== true)
     }
 
     initializeUserDefinedROISet() {
 
         const config =
             {
+                name: 'user defined',
                 isUserDefined: true,
                 features: []
             }
@@ -265,17 +322,8 @@ class ROIManager {
         return userDefinedROISet
     }
 
-    async deleteUserDefinedRegionWithKey(regionKey, columnContainer) {
-
+    async deleteRegionWithKey(regionKey, columnContainer) {
         columnContainer.querySelectorAll(createSelector(regionKey)).forEach(node => node.remove())
-
-        const feature = await this.findUserDefinedRegionWithKey(regionKey)
-
-        const set = await this.getUserDefinedROISet()
-
-        if (set) {
-            set.removeFeature(feature)
-        }
 
         const records = await this.getTableRecords()
 
@@ -284,24 +332,6 @@ class ROIManager {
             this.setROITableButtonVisibility(false)
         }
 
-    }
-
-    async findUserDefinedRegionWithKey(regionKey) {
-
-        const {chr, start, end} = parseRegionKey(regionKey)
-        const set = await this.getUserDefinedROISet()
-
-        if (set) {
-            const features = await set.getFeatures(chr, start, end)
-
-            for (let feature of features) {
-                if (feature.chr === chr && feature.start >= start && feature.end <= end) {
-                    return feature
-                }
-            }
-        }
-
-        return undefined
     }
 
     toJSON() {

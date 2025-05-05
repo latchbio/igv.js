@@ -13,9 +13,6 @@ class InputDialog {
         this.container = DOMUtils.div({class: 'igv-ui-generic-dialog-container'})
         parent.appendChild(this.container)
 
-        // const { x, y, width, height } = this.container.getBoundingClientRect();
-        // console.log(`InputDialog - x ${ x } y ${ y } width ${ width } height ${ height }`)
-
         // dialog header
         const header = DOMUtils.div({class: 'igv-ui-generic-dialog-header'})
         this.container.appendChild(header)
@@ -23,7 +20,7 @@ class InputDialog {
         // dialog label
         this.label = DOMUtils.div({class: 'igv-ui-generic-dialog-one-liner'})
         this.container.appendChild(this.label)
-        this.label.text = 'Unlabeled'
+        this.label.textContent = 'Unlabeled'
 
         // input container
         this.input_container = DOMUtils.div({class: 'igv-ui-generic-dialog-input'})
@@ -51,7 +48,7 @@ class InputDialog {
         DOMUtils.hide(this.container)
 
         this._input.addEventListener('keyup', e => {
-            if (13 === e.keyCode) {
+            if ('Enter' === e.code) {
                 if (typeof this.callback === 'function') {
                     this.callback(this._input.value)
                     this.callback = undefined
@@ -59,6 +56,7 @@ class InputDialog {
                 this._input.value = undefined
                 DOMUtils.hide(this.container)
             }
+            e.stopImmediatePropagation()   // Prevent key event to cause track keyboard navigation ("next feature")
         })
 
         this.ok.addEventListener('click', () => {
@@ -86,28 +84,16 @@ class InputDialog {
         return DOMPurify.sanitize(this._input.value)
     }
 
+
     present(options, e) {
 
         this.label.textContent = options.label
         this._input.value = options.value
         this.callback = options.callback || options.click
 
-        DOMUtils.show(this.container)
-        this.clampLocation(e.clientX, e.clientY)
-
-    }
-
-    clampLocation(clientX, clientY) {
-
-        const {width: w, height: h} = this.container.getBoundingClientRect()
-        const wh = window.innerHeight
-        const ww = window.innerWidth
-
-        const y = Math.min(wh - h, clientY)
-        const x = Math.min(ww - w, clientX)
-        this.container.style.left = `${x}px`
-        this.container.style.top = `${y}px`
-
+        const { top} = e.currentTarget.parentElement.getBoundingClientRect()
+        this.container.style.top = `${ top }px`;
+        this.container.style.display = 'flex';
     }
 }
 
