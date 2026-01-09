@@ -42,8 +42,8 @@
 
     var igvDiv = document.getElementById("igv-div")
 
-   // const ontBedGraph = ['chr', 'start', 'end', 'value',]
-   // igv.registerFileFormats("ontbedgraph", ontBedGraph)
+    // const ontBedGraph = ['chr', 'start', 'end', 'value',]
+    // igv.registerFileFormats("ontbedgraph", ontBedGraph)
 
     var options =
         {
@@ -55,13 +55,7 @@
                     name: "positive",
                     type: "wig",
                     url: "custom.bedgraph",
-                    decode: decodeBedGraph2,
-//        decodeCustom: decodeBedGraph2,
-//        format: "ontbedgraph",
-//        delimiter: "\t",
-//        min: "0",
-//        max: "1",
-//        format: "wig",
+                    decode: decodeBedGraph2
                 }
             ]
         }

@@ -1,28 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import GenomeUtils from "./genome/genomeUtils.js"
 import ChromosomeSelectWidget from "./ui/chromosomeSelectWidget.js"
 import {createIcon} from "./ui/utils/icons.js"
@@ -106,7 +81,7 @@ class ResponsiveNavbar {
         });
 
         this.searchInput.addEventListener('change', () => {
-            browser.doSearch(this.searchInput.value);
+            this.doSearch(this.searchInput.value);
         });
 
         const searchIconContainer = document.createElement('div');
@@ -117,7 +92,7 @@ class ResponsiveNavbar {
         searchIconContainer.appendChild(searchIcon);
 
         searchIconContainer.addEventListener('click', () => {
-            browser.doSearch(this.searchInput.value);
+            this.doSearch(this.searchInput.value);
         });
 
         this.windowSizePanel = new WindowSizePanel(locusSizeGroup, browser);
@@ -138,6 +113,7 @@ class ResponsiveNavbar {
 
         const showMultiSelect = config.showMultiSelectButton !== false;
         this.multiTrackSelectButton = new MultiTrackSelectButton(toggleButtonContainer, browser, this, showMultiSelect);
+
 
         this.cursorGuideButton = new CursorGuideButton(toggleButtonContainer, browser);
         this.centerLineButton = new CenterLineButton(toggleButtonContainer, browser);
@@ -263,6 +239,22 @@ class ResponsiveNavbar {
 
     show() {
         this.navigation.style.display = 'flex';
+    }
+
+    /**
+
+     * Search for the locus string -- this function is called from the navbar search box, and is not part of the API.
+     * Wraps ```search``` and presents an error dialog if false.
+     *
+     * @param locus
+     * @param init
+     * @returns {Promise<void>}
+     */
+    async doSearch(locus) {
+        const success = await this.browser.search(locus)
+        if (!success) {
+            this.browser.alert.present(new Error(`Unrecognized locus: <b> ${locus} </b>`))
+        }
     }
 
 }

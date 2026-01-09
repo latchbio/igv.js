@@ -77,6 +77,18 @@ class AlignmentTrack extends TrackBase {
             this.colorTable = new ColorTable(config.tagColorTable)
         }
 
+        // Only one of showTags / hideTags should be specified.  If both are specified showTags takes precedence.
+        if (config.showTags && config.hideTags) {
+            console.warn("Both showTags and hideTags specified.  showTags will be used.")
+        }
+        if (config.showTags) {
+            this.showTags = new Set(config.showTags)
+            this.hiddenTags = new Set()
+        } else {
+            this.hiddenTags = new Set(config.hideTags || ["SA", "MD"])
+        }
+
+
         // Backward compatibility overrides
         if (config.largeFragmentLengthColor) this.largeTLENColor = config.largeFragmentLengthColor
         if (config.pairOrienation) this.expectedPairOrientation = config.pairOrientation
@@ -130,7 +142,7 @@ class AlignmentTrack extends TrackBase {
     }
 
     dispose() {
-        this.browser.off('locuschage', this._locusChange)
+        this.browser.off('locuschange', this._locusChange)
     }
 
     /**
@@ -400,7 +412,7 @@ class AlignmentTrack extends TrackBase {
 
                     IGVGraphics.strokeLine(ctx, sPixel, yStrokedLine, ePixel, yStrokedLine, {
                         strokeStyle: color,
-                        lineWidth: 2,
+                        lineWidth: 2
                     })
 
                     // Add gap width as text like Java IGV if it fits nicely and is a multi-base gap
@@ -409,7 +421,7 @@ class AlignmentTrack extends TrackBase {
                         IGVGraphics.fillRect(ctx, textStart - 1, y - 1, gapTextWidth + 2, 12, {fillStyle: "white"})
                         IGVGraphics.fillText(ctx, gapLenText, textStart, y + 10, {
                             'font': 'normal 10px monospace',
-                            'fillStyle': this.deletionTextColor,
+                            'fillStyle': this.deletionTextColor
                         })
                     }
                 }
@@ -452,7 +464,7 @@ class AlignmentTrack extends TrackBase {
                         if (this.showInsertionText && insertionBlock.len > 1 && basePixelWidth > textPixelWidth) {
                             IGVGraphics.fillText(ctx, insertLenText, xBlockStart + 1, y + 10, {
                                 'font': 'normal 10px monospace',
-                                'fillStyle': this.insertionTextColor,
+                                'fillStyle': this.insertionTextColor
                             })
                         }
                         lastXBlockStart = xBlockStart
@@ -622,7 +634,7 @@ class AlignmentTrack extends TrackBase {
                                     height: alignmentHeight
                                 },
                                 baseColor,
-                                readChar,
+                                readChar
                             })
                         }
 
@@ -651,13 +663,28 @@ class AlignmentTrack extends TrackBase {
                 }
             }
         }
+    }
 
-    };
-
-    popupData(clickState) {
+    async popupData(clickState) {
         const clickedObject = this.getClickedObject(clickState)
-        return clickedObject ? clickedObject.popupData(clickState.genomicLocation) : undefined
-    };
+        if (clickedObject) {
+
+            // Determine reference base at clicked position, used for HGVS notation
+            let refBase
+            if (clickedObject.chr) {
+                const viewport = clickState.viewport
+                const alignmentContainer = viewport.cachedFeatures
+                const coverageMap = alignmentContainer?.coverageMap
+                const refseq = coverageMap?.refSeq
+                if (refseq) {
+                    const genomicLocation = Math.floor(clickState.genomicLocation)
+                    refBase = refseq.charAt(genomicLocation - coverageMap.bpStart).toUpperCase()
+                }
+            }
+
+            return clickedObject.popupData(clickState.genomicLocation, this.hiddenTags, this.showTags, refBase, this.browser.genome)
+        }
+    }
 
     /**
      * Return menu items for the AlignmentTrack
@@ -687,7 +714,10 @@ class AlignmentTrack extends TrackBase {
             colorByMenuItems.push({key: 'tlen', label: 'insert size (TLEN)'})
             colorByMenuItems.push({key: 'unexpectedPair', label: 'pair orientation & insert size (TLEN)'})
         }
-        colorByMenuItems.push({key: 'tag', label: 'tag'})
+        if (this.colorBy && this.colorBy.startsWith("tag:")) {
+            colorByMenuItems.push({key: this.colorBy, label: this.colorBy})
+        }
+        colorByMenuItems.push({key: 'tag', label: 'tag...'})
         for (let item of colorByMenuItems) {
             const selected = (this.colorBy === undefined && item.key === 'none') || this.colorBy === item.key
             menuItems.push(this.colorByCB(item, selected))
@@ -1204,7 +1234,7 @@ class AlignmentTrack extends TrackBase {
 
                     if (seqstring.length < maxSequenceSize) {
                         list.push({
-                            label: 'BLAT read sequence',
+                            label: 'BLAT visible sequence',
                             click: () => {
                                 const sequence = clickedAlignment.isNegativeStrand() ? reverseComplementSequence(seqstring) : seqstring
                                 const name = `${clickedAlignment.readName} - blat`
@@ -1299,17 +1329,16 @@ class AlignmentTrack extends TrackBase {
                     }
                 }
             }
-        }
 
-        // If we get here check downsampled intervals
-        if (offsetY < minGroupY && features.downsampledIntervals) {
-            for (const interval of features.downsampledIntervals) {
-                if (interval.start <= genomicLocation && interval.end >= genomicLocation) {
-                    return interval
+            // If we get here check downsampled intervals
+            if (offsetY < minGroupY && features.downsampledIntervals) {
+                for (const interval of features.downsampledIntervals) {
+                    if (interval.start <= genomicLocation && interval.end >= genomicLocation) {
+                        return interval
+                    }
                 }
             }
         }
-
 
     }
 
@@ -1415,9 +1444,17 @@ class AlignmentTrack extends TrackBase {
             case "tag":
                 const tagValue = alignment.tags()[tag]
                 if (tagValue !== undefined) {
-                    if (this.bamColorTag === tag) {
-                        color = IGVColor.createColorStringSafe(tagValue)
+
+                    // If the tag value is yc can be interpreted as a color, use it
+                    if ("yc" === tag.toLowerCase()) {
+                        const ycColor = IGVColor.createColorStringSafe(tagValue)
+                        if (ycColor) {
+                            color = ycColor
+                            break
+                        }
                     }
+
+                    // Tag value is not a color, use a color table
                     if (!this.colorTable) {
                         this.colorTable = new PaletteColorTable(this.tagColorPallete)
                     }

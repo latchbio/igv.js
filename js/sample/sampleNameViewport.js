@@ -1,6 +1,7 @@
 import * as DOMUtils from "../ui/utils/dom-utils.js"
 import {appleCrayonRGB} from '../util/colorPalletes.js'
 import IGVGraphics from "../igv-canvas.js"
+import {drawGroupDividers, GROUP_MARGIN_HEIGHT} from "./sampleUtils.js"
 
 const maxSampleNameViewportWidth = 200
 const fudgeTextMetricWidth = 4
@@ -27,12 +28,8 @@ class SampleNameViewport {
         this.viewport.appendChild(this.canvas)
         this.ctx = this.canvas.getContext("2d")
 
-        this.trackScrollDelta = 0
-
         this.contentTop = 0
         this.hitList = undefined
-
-        this.sortDirection = 1
 
         this.setWidth(width)
 
@@ -41,7 +38,11 @@ class SampleNameViewport {
 
     checkCanvas() {
 
-        const width = this.browser.sampleNameViewportWidth || 0
+        let width = 0
+        if (true === this.browser.showSampleNames) {
+            width = undefined === this.browser.sampleNameViewportWidth ? 0 : this.browser.sampleNameViewportWidth
+        }
+
         this.ctx.canvas.width = width * window.devicePixelRatio
         this.ctx.canvas.style.width = `${width}px`
 
@@ -90,29 +91,38 @@ class SampleNameViewport {
         IGVGraphics.fillRect(context, 0, 0, context.canvas.width, samples.height, { fillStyle: appleCrayonRGB('snow') })
 
         if (samples && samples.names.length > 0) {
-            const viewportHeight = this.viewport.getBoundingClientRect().height
 
+            const viewportHeight = this.viewport.getBoundingClientRect().height
             const tileHeight = samples.height
             const shim = tileHeight - 2 <= 1 ? 0 : 1
 
-            let y = this.contentTop + samples.yOffset
+            let y =  samples.yOffset - this.contentTop
+
+            let rowIndex = 0
             this.hitList = {}
+
             for (const sampleName of samples.names) {
 
-                if (y > viewportHeight) {
-                    break
+                const x = 0
+                let yy = y + shim
+                if (samples.groupIndeces && samples.groups.size > 0) {
+                    yy += (samples.groupIndeces[rowIndex] + 1) * GROUP_MARGIN_HEIGHT
                 }
-                if (y + tileHeight > 0) {
-                    const x = 0
-                    const yy = y + shim
-                    const hh = tileHeight - (2 * shim)
-                    // IGVGraphics.fillRect(context, x, yy, context.canvas.width, hh, { fillStyle: randomRGB(100, 250) })
 
+                if (yy + tileHeight > 0) {
+                    const hh = tileHeight - (2 * shim)
                     drawTextInRect(context, sampleName, x + 2, yy, context.canvas.width, hh);
                 }
 
                 y += tileHeight
+                rowIndex++
+
+                if (y > viewportHeight) {
+                    break
+                }
             }
+
+            drawGroupDividers(context, 0, context.canvas.width, context.canvas.height,  samples.yOffset - this.contentTop, samples.height, samples.groups)
         }
     }
 

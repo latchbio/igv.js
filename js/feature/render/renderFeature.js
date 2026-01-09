@@ -1,5 +1,5 @@
 import IGVGraphics from "../../igv-canvas.js"
-import {getEonStart, getExonEnd, getExonPhase} from "../exonUtils.js"
+import {getCodingStart, getCodingEnd, getExonPhase} from "../exonUtils.js"
 import {translationDict} from "../../sequenceTrack.js"
 import {complementSequence} from "../../util/sequenceUtils.js"
 
@@ -215,7 +215,7 @@ function renderAminoAcidSequence(ctx, strand, leftExon, exon, riteExon, bpStart,
         let aaLetter
         if (undefined === aminoAcidLetter) {
 
-            if(sequenceInterval.hasSequence(start, end)) {
+            if (sequenceInterval.hasSequence(start, end)) {
 
                 const sequence = sequenceInterval.getSequence(start, end)
                 if (sequence && 3 === sequence.length) {
@@ -251,8 +251,8 @@ function renderAminoAcidSequence(ctx, strand, leftExon, exon, riteExon, bpStart,
     }
 
     const phase = getExonPhase(exon)
-    let ss = getEonStart(exon)
-    let ee = getExonEnd(exon)
+    let ss = getCodingStart(exon)
+    let ee = getCodingEnd(exon)
 
     let bpTripletStart
     let bpTripletEnd
@@ -351,7 +351,8 @@ function renderFeatureLabel(ctx, feature, featureX, featureX1, featureY, referen
     try {
         ctx.save()
 
-        let name = feature.name
+        const labelField = this.config.labelField ? this.config.labelField : 'name'
+        let name = feature[labelField]
         if (name === undefined && feature.gene) name = feature.gene.name
         if (name === undefined) name = feature.id || feature.ID
         if (!name || name === '.') return
@@ -384,20 +385,13 @@ function renderFeatureLabel(ctx, feature, featureX, featureX1, featureY, referen
         if (options.labelAllFeatures || xleft > lastLabelX || selected) {
             options.rowLastLabelX[feature.row] = xright
 
-            if ('y' === options.axis) {
-                // TODO -- is this ever used?
-                ctx.save()
-                IGVGraphics.labelTransformWithContext(ctx, centerX)
-                IGVGraphics.fillText(ctx, name, centerX, labelY, geneFontStyle, transform)
-                ctx.restore()
-            } else {
-                ctx.clearRect(
-                    centerX - textMetrics.width / 2 - 1,
-                    labelY - textMetrics.actualBoundingBoxAscent - 1,
-                    textMetrics.width + 2,
-                    textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent + 2)
-                IGVGraphics.fillText(ctx, name, centerX, labelY, geneFontStyle, transform)
-            }
+            ctx.clearRect(
+                centerX - textMetrics.width / 2 - 1,
+                labelY - textMetrics.actualBoundingBoxAscent - 1,
+                textMetrics.width + 2,
+                textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent + 2)
+            IGVGraphics.fillText(ctx, name, centerX, labelY, geneFontStyle, transform)
+
         }
 
     } finally {
@@ -427,7 +421,7 @@ function getAminoAcidLetterWithExonGap(strand, phase, phaseExtentStart, phaseExt
                 return undefined
             }
 
-            [ss, ee] = [getExonEnd(leftExon) - (3 - phase), getExonEnd(leftExon)]
+            [ss, ee] = [getCodingEnd(leftExon) - (3 - phase), getCodingEnd(leftExon)]
             stringA = sequenceInterval.getSequence(ss, ee)
 
             if (!stringA) {
@@ -446,7 +440,7 @@ function getAminoAcidLetterWithExonGap(strand, phase, phaseExtentStart, phaseExt
             }
 
             const ritePhase = getExonPhase(riteExon)
-            const riteStart = getEonStart(riteExon)
+            const riteStart = getCodingStart(riteExon)
             stringB = sequenceInterval.getSequence(riteStart, riteStart + ritePhase)
 
             if (!stringB) {
@@ -462,14 +456,14 @@ function getAminoAcidLetterWithExonGap(strand, phase, phaseExtentStart, phaseExt
         if (phase) {
             stringA = sequenceInterval.getSequence(phaseExtentStart, phaseExtentEnd)
 
-            if (undefined === stringA) {
+            if (!stringA) {
                 return undefined
             }
 
-            [ss, ee] = [getEonStart(riteExon), getEonStart(riteExon) + (3 - phase)]
+            [ss, ee] = [getCodingStart(riteExon), getCodingStart(riteExon) + (3 - phase)]
             stringB = sequenceInterval.getSequence(ss, ee)
 
-            if (undefined === stringB) {
+            if (!stringB) {
                 return undefined
             }
 
@@ -481,15 +475,15 @@ function getAminoAcidLetterWithExonGap(strand, phase, phaseExtentStart, phaseExt
         if (remainder) {
             stringB = sequenceInterval.getSequence(remainder.start, remainder.end)
 
-            if (undefined === stringB) {
+            if (!stringB) {
                 return undefined
             }
 
             const leftPhase = getExonPhase(leftExon)
-            const leftEnd = getExonEnd(leftExon)
+            const leftEnd = getCodingEnd(leftExon)
             stringA = sequenceInterval.getSequence(leftEnd - leftPhase, leftEnd)
 
-            if (undefined === stringA) {
+            if (!stringA) {
                 return undefined
             }
 

@@ -1,28 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import {doAutoscale} from "./util/igvUtils.js"
 import {createViewport} from "./util/viewportUtils.js"
 import {FeatureUtils, IGVColor} from '../node_modules/igv-utils/src/index.js'
@@ -110,14 +85,34 @@ class TrackView {
             const viewport = createViewport(this, viewportColumns[i], referenceFrameList[i], viewportWidth)
             this.viewports.push(viewport)
         }
+        if (typeof this.track.createGroupLabels === 'function') {
+            this.track.createGroupLabels()
+        }
+    }
+
+    /**
+     * Return the last (rightmost) track viewport.  Normally this is the only one, but in multilocus view there may be
+     * several
+     * @returns {undefined|*} The last viewport, or undefined if there are no viewports
+     */
+    getLastViewport() {
+        if (this.viewports && this.viewports.length > 0) {
+            return this.viewports[this.viewports.length - 1]
+        } else {
+            return undefined
+        }
     }
 
     createAxis(browser, track) {
 
+        const axisColumn = browser.columnContainer.querySelector('.igv-axis-column')
+        if(!axisColumn) {
+            return;   // The axis column is optional.
+        }
+
         const axis = DOMUtils.div()
         this.axis = axis
-
-        browser.columnContainer.querySelector('.igv-axis-column').appendChild(axis)
+        axisColumn.appendChild(axis)
 
         axis.dataset.tracktype = track.type
 
@@ -232,7 +227,7 @@ class TrackView {
                                 trackView.repaintViews()
                             }
                         },
-                    };
+                    }
             } else {
                 colorHandlers =
                     {
@@ -244,7 +239,7 @@ class TrackView {
                             this.track.altColor = hexToRGB(hex)
                             this.repaintViews()
                         }
-                    };
+                    }
             }
 
             const moreColorsPresentationColor = 'color' === colorSelection ? (this.track.color || this.track.constructor.defaultColor) : (this.track.altColor || this.track.constructor.defaultColor)
@@ -296,6 +291,7 @@ class TrackView {
         this.dragHandle.style.height = `${newHeight}px`
         this.gearContainer.style.height = `${newHeight}px`
 
+        this.browser.fireEvent("trackheightchange", this)
     }
 
     updateScrollbar() {
@@ -311,39 +307,54 @@ class TrackView {
             if (viewportContentHeight > viewportHeight) {
                 this.innerScroll.style.display = 'block'
                 this.innerScroll.style.height = `${innerScrollHeight}px`
+
             } else {
                 this.innerScroll.style.display = 'none'
             }
-
         }
+    }
 
+    setTop(contentTop) {
+        for (let viewport of this.viewports) {
+            viewport.setTop(contentTop)
+        }
+        this.sampleInfoViewport.setTop(contentTop)
+        this.sampleNameViewport.setTop(contentTop)
     }
 
     moveScroller(delta) {
 
         const y = this.innerScroll.offsetTop + delta
         const top = Math.min(Math.max(0, y), this.outerScroll.clientHeight - this.innerScroll.clientHeight)
-        this.innerScroll.style.top = `${top}px`;
+        this.innerScroll.style.top = `${top}px`
 
         const contentHeight = this.maxViewportContentHeight()
-        const contentTop = -Math.round(top * (contentHeight / this.viewports[0].viewportElement.clientHeight))
-
-        for (let viewport of this.viewports) {
-            viewport.setTop(contentTop)
-        }
-
-        this.sampleInfoViewport.setTop(contentTop)
-
-        this.sampleNameViewport.trackScrollDelta = delta
-        this.sampleNameViewport.setTop(contentTop)
-
+        const contentTop = Math.round(top * (contentHeight / this.viewports[0].viewportElement.clientHeight))
+        this.setTop(contentTop)
     }
 
-    isLoading() {
-        for (let viewport of this.viewports) {
-            if (viewport.isLoading()) return true
+    /**
+     * Scroll the content vertically by 'delta' pixels in track view coordinates.
+     * @param {number} delta - The number of pixels to scroll vertically.
+     */
+    scrollByPixels(delta) {
+
+
+        const currentTop = this.viewports[0].getContentTop()  // Bit of a hack, contentTop is the same for all viewports
+
+        const contentHeight = this.maxViewportContentHeight()
+        const maxContentTop = contentHeight - this.viewports[0].viewportElement.clientHeight
+        const newTop = Math.min(Math.max(0, currentTop + delta), maxContentTop)
+
+        this.setTop(newTop)
+
+        if (this.innerScroll) {
+            const viewportHeight = this.viewports[0].viewportElement.clientHeight
+            const top = Math.round(newTop * (viewportHeight / contentHeight))
+            this.innerScroll.style.top = `${top}px`
         }
     }
+
 
     /**
      * Repaint all viewports without loading any new data.   Use this for events that change visual aspect of data,
@@ -409,7 +420,7 @@ class TrackView {
 
         if (!(this.browser && this.browser.referenceFrameList)) return
 
-        const visibleViewports = this.viewports.filter(viewport => viewport.isVisible())
+        const visibleViewports = this.viewports.filter(viewport => viewport.isVisible() && viewport.checkZoomIn())
 
         // Shift viewports left/right to current genomic state (pans canvas)
         visibleViewports.forEach(viewport => viewport.shift())
@@ -420,10 +431,10 @@ class TrackView {
         }
 
         // Filter zoomed out views.  This has the side effect or turning off or no the zoomed out notice
-        const viewportsToRepaint = visibleViewports.filter(vp => vp.needsRepaint()).filter(viewport => viewport.checkZoomIn())
+        const viewportsToRepaint = visibleViewports.filter(vp => vp.needsRepaint())
 
         // Get viewports that require a data load
-        const viewportsToReload = visibleViewports.filter(viewport => viewport.checkZoomIn()).filter(viewport => viewport.needsReload())
+        const viewportsToReload = visibleViewports.filter(viewport => viewport => viewport.needsReload())
 
         // Trigger viewport to load features needed to cover current genomic range
         // NOTE: these must be loaded synchronously, do not user Promise.all,  not all file readers are thread safe
@@ -594,17 +605,19 @@ class TrackView {
 
         if (false === scrollbarExclusionTypes.has(this.track.type)) {
 
-            // Adjust scrollbar, if needed, to insure content is in view
+            // Adjust top, if needed, to insure content is in view
             const currentTop = this.viewports[0].getContentTop()
             const viewportHeight = this.viewports[0].viewportElement.clientHeight
             const minTop = Math.min(0, viewportHeight - contentHeight)
             if (currentTop < minTop) {
-                for (let viewport of this.viewports) {
-                    viewport.setTop(minTop)
-                }
+                this.setTop(minTop)
             }
+
             this.updateScrollbar()
+            this.moveScroller(0)
+
         }
+
     }
 
     createTrackScrollbar(browser) {
@@ -650,7 +663,11 @@ class TrackView {
 
             this.gear = DOMUtils.div()
             this.gearContainer.appendChild(this.gear)
-            this.gear.appendChild(createIcon('cog'))
+            const cog = createIcon('cog')
+            if(false === browser.config.showGearColumn) {
+                cog.style.color = 'white'
+            }
+            this.gear.appendChild(cog)
 
             this.trackGearPopup = new MenuPopup(this.gear)
 
@@ -667,7 +684,7 @@ class TrackView {
                         otherTrackView.trackGearPopup.popover.style.display = 'none'
                     }
 
-                    this.trackGearPopup.presentMenuList(this, browser.menuUtils.trackMenuItemList(this))
+                    this.trackGearPopup.presentMenuList(this, browser.menuUtils.trackMenuItemList(this), browser.config)
                 } else {
                     this.trackGearPopup.popover.style.display = 'none'
                 }
@@ -689,7 +706,7 @@ class TrackView {
 
             const {y} = DOMUtils.pageCoordinates(event)
 
-            this.innerScroll.dataset.yDown = y.toString();
+            this.innerScroll.dataset.yDown = y.toString()
 
             this.boundColumnContainerMouseMoveHandler = columnContainerMouseMoveHandler.bind(this)
             browser.columnContainer.addEventListener('mousemove', this.boundColumnContainerMouseMoveHandler)
@@ -702,7 +719,7 @@ class TrackView {
 
                 this.moveScroller(y - parseInt(this.innerScroll.dataset.yDown))
 
-                this.innerScroll.dataset.yDown = y.toString();
+                this.innerScroll.dataset.yDown = y.toString()
 
 
             }

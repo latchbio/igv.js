@@ -1,29 +1,4 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
-import {FileUtils, GoogleAuth, GoogleDrive, StringUtils} from "../../node_modules/igv-utils/src/index.js"
+import {FileUtils, StringUtils} from "../../node_modules/igv-utils/src/index.js"
 import * as DOMUtils from "../ui/utils/dom-utils.js"
 
 const extend = function (parent, child) {
@@ -80,7 +55,7 @@ const doAutoscale = function (features) {
         min = Number.MAX_VALUE
         max = -Number.MAX_VALUE
 
-        for(let f of features) {
+        for (let f of features) {
             if (!Number.isNaN(f.value)) {
                 min = Math.min(min, f.value)
                 max = Math.max(max, f.value)
@@ -159,16 +134,7 @@ function isInteger(str) {
 }
 
 async function getFilename(url) {
-    if (StringUtils.isString(url) && url.startsWith("https://drive.google.com")) {
-        // This will fail if Google API key is not defined
-        if (GoogleAuth.getApiKey() === undefined) {
-            throw Error("Google drive is referenced, but API key is not defined.  An API key is required for Google Drive access")
-        }
-        const json = await GoogleDrive.getDriveFileInfo(url)
-        return json.originalFileName || json.name
-    } else {
-        return FileUtils.getFilename(url)
-    }
+    return FileUtils.getFilename(url)
 }
 
 function prettyBasePairNumber(raw) {
@@ -207,6 +173,7 @@ function isDataURL(obj) {
 function createColumn(columnContainer, className) {
     const column = DOMUtils.div({class: className})
     columnContainer.appendChild(column)
+    return column
 }
 
 
@@ -236,11 +203,11 @@ function isSecureContext() {
 function expandRegion(start, end, extent) {
     if (extent > (end - start)) {
         const center = (end + start) / 2
-        const ss = Math.floor(center - extent/2)
-        const ee = Math.ceil(center + extent/2)
-        return { start:ss, end:ee }
+        const ss = Math.floor(center - extent / 2)
+        const ee = Math.ceil(center + extent / 2)
+        return {start: ss, end: ee}
     } else {
-        return { start, end }
+        return {start, end}
     }
 }
 
@@ -248,18 +215,31 @@ function getElementVerticalDimension(element) {
 
     const style = window.getComputedStyle(element)
 
-    const marginTop = parseInt(style.marginTop);
-    const marginBottom = parseInt(style.marginBottom);
+    const marginTop = parseInt(style.marginTop)
+    const marginBottom = parseInt(style.marginBottom)
 
-    const { top, bottom, height } = element.getBoundingClientRect()
+    const {top, bottom, height} = element.getBoundingClientRect()
     return {
         top: Math.floor(top) - marginTop,
         bottom: Math.floor(bottom) + marginBottom,
         height: Math.floor(height) + marginTop + marginBottom
-    };
+    }
 }
 
 export {
-    createColumn, extend, isSimpleType, buildOptions, validateGenomicExtent, doAutoscale, isNumber,
-    getFilename, prettyBasePairNumber, isDataURL, insertElementBefore, insertElementAfter, isSecureContext, expandRegion, isInteger, getElementVerticalDimension
+    createColumn,
+    extend,
+    isSimpleType,
+    buildOptions,
+    validateGenomicExtent,
+    doAutoscale,
+    isNumber,
+    prettyBasePairNumber,
+    isDataURL,
+    insertElementBefore,
+    insertElementAfter,
+    isSecureContext,
+    expandRegion,
+    isInteger,
+    getElementVerticalDimension
 }

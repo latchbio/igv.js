@@ -73,11 +73,11 @@ class FeatureTrack extends TrackBase {
                     config.colorBy = config.colorBy.field
                 }
                 this.colorBy = config.colorBy   // Can be undefined => default
-                if (config.colorTable) {
-                    this.colorTable = new ColorTable(config.colorTable)
-                } else {
-                    this.colorTable = new PaletteColorTable("Set1")
-                }
+            }
+            if (config.colorTable) {
+                this.colorTable = new ColorTable(config.colorTable)
+            } else {
+                this.colorTable = new PaletteColorTable("Set1")
             }
         }
     }
@@ -195,7 +195,11 @@ class FeatureTrack extends TrackBase {
         // If drawing amino acids fetch cached sequence interval.  It is not needed if track does not support AA, but
         // costs nothing since only a reference to a cached object is fetched.
         if (bpPerPixel < aminoAcidSequenceRenderThreshold) {
-            options.sequenceInterval = this.browser.genome.getSequenceInterval(referenceFrame.chr, bpStart, bpEnd)
+            // Restrict the range requested to the limits: 1-chromosome.bpLength
+            const chromosome = this.browser.genome.getChromosome(referenceFrame.chr)
+            const chromosomeEnd = chromosome.bpLength
+            options.sequenceInterval = this.browser.genome.getSequenceInterval(referenceFrame.chr,
+                bpStart > 0 ? bpStart : 0, bpEnd > chromosomeEnd ? chromosomeEnd : bpEnd)
         }
 
 
@@ -371,7 +375,10 @@ class FeatureTrack extends TrackBase {
                     this.trackView.repaintViews()
                 }
 
-                menuItems.push({element:createCheckbox(`Color by ${colorScheme}`, colorScheme === this.colorBy), click: colorSchemeHandler})
+                menuItems.push({
+                    element: createCheckbox(`Color by ${colorScheme}`, colorScheme === this.colorBy),
+                    click: colorSchemeHandler
+                })
             }
         }
 
@@ -393,7 +400,10 @@ class FeatureTrack extends TrackBase {
                 this.trackView.repaintViews()
             }
 
-            menuItems.push({element:createCheckbox(lut[displayMode], displayMode === this.displayMode), click: displayModeHandler})
+            menuItems.push({
+                element: createCheckbox(lut[displayMode], displayMode === this.displayMode),
+                click: displayModeHandler
+            })
         }
 
         return menuItems
@@ -548,11 +558,6 @@ class FeatureTrack extends TrackBase {
  */
 function monitorTrackDrag(track) {
 
-    if (track.browser.on) {
-        track.browser.on('trackdragend', onDragEnd)
-        track.browser.on('trackremoved', unSubscribe)
-    }
-
     function onDragEnd() {
         if (track.trackView && track.displayMode !== "SQUISHED") {
             // Repaint views to adjust feature name if center is moved out of view
@@ -560,12 +565,10 @@ function monitorTrackDrag(track) {
         }
     }
 
-    function unSubscribe(removedTrack) {
-        if (track.browser.un && track === removedTrack) {
-            track.browser.un('trackdragend', onDragEnd)
-            track.browser.un('trackremoved', unSubscribe)
-        }
+    if (track.browser.on) {
+        track.browser.on('trackdragend', onDragEnd)
     }
+
 
 }
 

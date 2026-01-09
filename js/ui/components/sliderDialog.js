@@ -53,11 +53,11 @@ class SliderDialog {
 
         DOMUtils.hide(this.container)
 
-        this._input.addEventListener('input', () => {
+        this._input.addEventListener('input', UIUtils.throttle(() => {
             const number = parseFloat(this._input.value)/this._scaleFactor
             this.callback(number)
             this._output.value = `${number.toFixed(this._precision)}`
-        }, false)
+        }, 200))
 
         this.ok.addEventListener('click', () => {
             if (typeof this.callback === 'function') {
@@ -103,6 +103,10 @@ class SliderDialog {
         this._output.value = `${number.toFixed(this._precision)}`
 
         this.callback = options.callback || options.click
+
+        if(options.color) {
+            this._input.style.background = `linear-gradient(to right, #fff, ${options.color})`;
+        }
 
         DOMUtils.show(this.container)
         this.clampLocation(e.clientX, e.clientY)

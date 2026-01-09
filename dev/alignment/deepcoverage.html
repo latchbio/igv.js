@@ -12,7 +12,7 @@
 
 <script type="module">
 
-    import igv from "../../js/index.js";
+    import igv from "../../js/index.js"
 
     var options =
         {
@@ -22,8 +22,8 @@
                 {
                     type: 'alignment',
                     format: 'bam',
-                    url: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/bam/deep/deep_coverage.bam',
-                    indexURL: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/bam/deep/deep_coverage.bam.bai',
+                    url: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/bam/deep/deep_coverage.bam',
+                    indexURL: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/bam/deep/deep_coverage.bam.bai',
                     samplingDepth: Number.MAX_SAFE_INTEGER,
                     alignmentRowHeight: 10,
                     colorBy: "strand",
@@ -32,8 +32,8 @@
                 {
                     type: 'alignment',
                     format: 'bam',
-                    url: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/bam/deep/deep_coverage.bam',
-                    indexURL: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/bam/deep/deep_coverage.bam.bai',
+                    url: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/bam/deep/deep_coverage.bam',
+                    indexURL: 'https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/bam/deep/deep_coverage.bam.bai',
                     samplingDepth: 100,
                     alignmentRowHeight: 10,
                     colorBy: "strand",
@@ -42,11 +42,11 @@
             ]
         }
 
-    var igvDiv = document.getElementById("igvDiv");
+    var igvDiv = document.getElementById("igvDiv")
 
-   igv.createBrowser(igvDiv, options)
+    igv.createBrowser(igvDiv, options)
         .then(function (browser) {
-            console.log("Created IGV browser");
+            console.log("Created IGV browser")
         })
 
 

@@ -21,7 +21,7 @@ class ChromAliasBB {
     }
 
     async preload(chrNames) {
-        await this.reader.preload();
+       await this.reader.preload()
         for(let nm of chrNames) {
             await this.search(nm)
         }

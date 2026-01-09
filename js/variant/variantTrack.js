@@ -1,29 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2016 University of California San Diego
- * Author: Jim Robinson
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import FeatureSource from '../feature/featureSource.js'
 import TrackBase from "../trackBase.js"
 import IGVGraphics from "../igv-canvas.js"
@@ -176,7 +150,8 @@ class VariantTrack extends TrackBase {
     }
 
     get supportsWholeGenome() {
-        return !this.config.indexURL || this.config.supportsWholeGenome === true
+        const sourceSupportsWG = typeof this.featureSource.supportsWholeGenome === 'function' && this.featureSource.supportsWholeGenome()
+        return sourceSupportsWG || this.config.supportsWholeGenome === true
     }
 
     get color() {
@@ -249,11 +224,15 @@ class VariantTrack extends TrackBase {
         const yOffset = TOP_MARGIN + nVariantRows * (variantHeight + vGap)
 
         return {
-            names: this.sampleKeys,
+            names: this.sampleKeys || [],
             yOffset,
-            height
+            height,
+            // groups: this.groups,
+            // groupIndeces,
+            // groupMarginHeight: this.getGroupMarginHeight()
         }
     }
+
 
     /**
      * The required height in pixels required for the track content.   This is not the visible track height, which
@@ -832,7 +811,7 @@ class VariantTrack extends TrackBase {
             direction: sortDirection === 1 ? "ASC" : "DESC"
         }
 
-        this.sampleKeys = this.browser.sampleInfo.getSortedSampleKeysByAttribute(this.sampleKeys, attribute, sortDirection)
+        this.sampleKeys = this.browser.sampleInfo.sortSampleKeysByAttribute(this.sampleKeys, attribute, sortDirection)
         this.trackView.repaintViews()
 
     }
@@ -1004,7 +983,6 @@ class VariantTrack extends TrackBase {
             }
         }
     }
-
 }
 
 

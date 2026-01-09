@@ -12,6 +12,9 @@ import TrackBase from "./trackBase.js"
 import Browser from "./browser.js"
 import AlertDialog from "./ui/components/alertDialog.js"
 import {registerFileFormats} from "./util/fileFormats.js"
+import {loadHub} from "./ucsc/hub/hubParser.js"
+import {createIcon} from "./ui/utils/icons.js"
+import createWebSocketClient from "./websocket/websocketClient.js"
 
 const setApiKey = igvxhr.setApiKey
 
@@ -21,6 +24,10 @@ function setGoogleOauthToken(accessToken) {
 
 function setOauthToken(accessToken, host) {
     return igvxhr.setOauthToken(accessToken, host)
+}
+
+function setCORSProxy(proxyURL) {
+    igvxhr.corsProxy = proxyURL
 }
 
 // Backward compatibility
@@ -39,6 +46,7 @@ export default {
     visibilityChange,
     setGoogleOauthToken,
     setOauthToken,
+    setCORSProxy,
     oauth,
     version,
     setApiKey,
@@ -46,6 +54,10 @@ export default {
     registerTrackClass,
     registerTrackCreatorFunction,
     registerFileFormats,
-    loadSessionFile: Browser.loadSessionFile
+    loadSessionFile: Browser.loadSessionFile,
+    loadHub,
+    uncompressSession: Browser.uncompressSession,
+    createIcon,
+    createWebSocketClient
 }
 

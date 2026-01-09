@@ -1,29 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2016-2017 The Regents of the University of California
- * Author: Jim Robinson
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import * as DOMUtils from "../ui/utils/dom-utils.js"
 
 const maximumSequenceCountExceeded = "Maximum sequence count exceeded"
@@ -39,10 +13,24 @@ class ChromosomeSelectWidget {
         this.select.setAttribute('name', 'chromosome-select-widget')
         this.container.appendChild(this.select)
 
-        this.select.addEventListener('change', () => {
+        this.select.addEventListener('change', async () => {
             this.select.blur()
             if (this.select.value !== '' && maximumSequenceCountExceeded !== this.select.value) {
-                browser.search(this.select.value)
+
+                if (this.select.value.trim().toLowerCase() === "all" || this.select.value === "*") {
+                    if (browser.genome.wholeGenomeView) {
+                        const wgChr = browser.genome.getChromosome("all")
+                        browser.updateLoci([{chr: "all", start: 0, end: wgChr.bpLength}])
+                    }
+                } else {
+                    const chromosome = await browser.genome.loadChromosome(this.select.value)
+                    const locusObject = {chr: chromosome.name}
+                    if (locusObject.start === undefined && locusObject.end === undefined) {
+                        locusObject.start = 0
+                        locusObject.end = chromosome.bpLength
+                    }
+                    browser.updateLoci([locusObject])
+                }
             }
         })
 
@@ -71,10 +59,13 @@ class ChromosomeSelectWidget {
             genome.wgChromosomeNames.map(nm => genome.getChromosomeDisplayName(nm)) :
             []
 
+        const alreadyAdded = genome.wgChromosomeNames ? new Set(genome.wgChromosomeNames) : new Set()
+
         if (this.showAllChromosomes && genome.chromosomeNames.length > 1) {
             const exclude = new Set(list)
-            let count = 0
+            let count = alreadyAdded.size
             for (let nm of genome.chromosomeNames) {
+                if(alreadyAdded.has(nm)) continue
                 if (++count === 1000) {
                     list.push(maximumSequenceCountExceeded)
                     break

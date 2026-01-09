@@ -6,11 +6,11 @@ import Alert from './ui/alert.js'
 import * as TrackUtils from './util/trackUtils.js'
 import TrackView, {igv_axis_column_width} from "./trackView.js"
 import C2S from "./canvas2svg.js"
-import {getTrack} from "./trackFactory.js"
+import {getTrack, knownTrackTypes} from "./trackFactory.js"
 import XMLSession from "./session/igvXmlSession.js"
 import GenomeUtils from "./genome/genomeUtils.js"
 import ReferenceFrame, {createReferenceFrameList} from "./referenceFrame.js"
-import {createColumn, doAutoscale, getFilename} from "./util/igvUtils.js"
+import {createColumn, doAutoscale} from "./util/igvUtils.js"
 import {createViewport} from "./util/viewportUtils.js"
 import {bppSequenceThreshold, defaultSequenceTrackOrder} from './sequenceTrack.js'
 import version from "./version.js"
@@ -30,9 +30,7 @@ import {createCircularView, makeCircViewChromosomes} from "./jbrowse/circularVie
 import ROIManager from './roi/ROIManager.js'
 import TrackROISet from "./roi/trackROISet.js"
 import SampleInfo from "./sample/sampleInfo.js"
-import HicFile from "./hic/straw/hicFile.js"
 import {translateSession} from "./hic/shoeboxUtils.js"
-import Hub from "./ucsc/ucscHub.js"
 import MenuUtils from "./ui/menuUtils.js"
 import Genome from "./genome/genome.js"
 import {setDefaults} from "./igv-create.js"
@@ -47,6 +45,10 @@ import {convertToHubURL} from "./ucsc/ucscUtils.js"
 import CursorGuide from "./ui/cursorGuide.js"
 import SliderDialog from "./ui/components/sliderDialog.js"
 import {createBlatTrack} from "./blat/blatTrack.js"
+import {loadHub} from "./ucsc/hub/hubParser.js"
+import {EventEmitter} from "./events.js"
+import Locus from "./locus.js"
+import {isLocalFile, isGoogleDriveURL} from "./util/sessionResourceValidator.js"
 
 
 // css - $igv-scrollbar-outer-width: 14px;
@@ -71,11 +73,12 @@ class Browser {
         this.config = config
         this.guid = DOMUtils.guid()
         this.namespace = '.browser_' + this.guid
-
         this.parent = parentDiv
+        this.eventEmitter = new EventEmitter()
 
         let shadowRoot = parentDiv.shadowRoot
         if (!shadowRoot) {
+            // Create the shadow root and attach the IGV CSS stylesheet.
             shadowRoot = parentDiv.attachShadow({mode: "open"})
             const sheet = new CSSStyleSheet()
             sheet.replaceSync(igvCss)
@@ -86,6 +89,11 @@ class Browser {
         shadowRoot.appendChild(this.root)
 
         this.alert = new Alert(this.root)
+
+        this.spinnerElement = document.createElement('div')
+        this.spinnerElement.className = 'igv-loading-spinner-container'
+        this.root.appendChild(this.spinnerElement)
+        this.spinnerElement.appendChild(document.createElement('div'))
 
         this.columnContainer = DOMUtils.div({class: 'igv-column-container'})
         this.root.appendChild(this.columnContainer)
@@ -105,14 +113,13 @@ class Browser {
             doubleClickDelay: config.doubleClickDelay || 500
         }
 
-        // Map of event name -> [ handlerFn, ... ]
-        this.eventHandlers = {}
-
         if (config.listeners) {
             for (let evt of Object.keys(config.listeners)) {
                 this.on(evt, config.listeners[evt])
             }
         }
+
+        // Events
 
         this.on('trackremoved', () => {
 
@@ -133,7 +140,7 @@ class Browser {
             }
         })
 
-        this.on('didchangecolumnlayout', () => {
+        this.on('columnlayoutchange', () => {
             if (trackViewportPopoverList.length > 0) {
                 const len = trackViewportPopoverList.length
                 for (let i = 0; i < len; i++) {
@@ -154,6 +161,7 @@ class Browser {
 
         // previous track colors for colorPicker
         this.previousTrackColors = []
+
     }
 
     get doShowROITable() {
@@ -206,7 +214,7 @@ class Browser {
 
         this.navbar = new ResponsiveNavbar(config, this)
 
-        this.columnContainer.parentNode.insertBefore(this.navbar.navigation, this.columnContainer);
+        this.columnContainer.parentNode.insertBefore(this.navbar.navigation, this.columnContainer)
 
         if (false === config.showControls) {
             this.navbar.hide()
@@ -219,7 +227,7 @@ class Browser {
         this.dataRangeDialog = new DataRangeDialog(this, this.root)
         this.dataRangeDialog.container.id = `igv-data-range-dialog-${DOMUtils.guid()}`
 
-        this.genericColorPicker = new GenericColorPicker({ parent: this.root, width: 180 })
+        this.genericColorPicker = new GenericColorPicker({parent: this.root, width: 180})
         this.genericColorPicker.container.id = `igv-track-color-picker-${DOMUtils.guid()}`
 
         this.sliderDialog = new SliderDialog(this.root)
@@ -229,10 +237,10 @@ class Browser {
 
     getSampleNameViewportWidth() {
 
-        if (undefined === this.sampleNameViewportWidth) {
+        if (false === this.showSampleNames || undefined === this.sampleNameViewportWidth) {
             return 0
         } else {
-            return false === this.showSampleNames ? 0 : this.sampleNameViewportWidth
+            return this.sampleNameViewportWidth
         }
 
     }
@@ -285,7 +293,7 @@ class Browser {
 
         const {x, y, width, height} = this.columnContainer.getBoundingClientRect()
 
-        const h_render = 8000      // <= DO NOT USE 'height' here
+        const h_render = Number.MAX_SAFE_INTEGER      // <= DO NOT USE 'height' here
 
         const config =
             {
@@ -388,9 +396,6 @@ class Browser {
         let session
         if (options.url || options.file) {
             session = await Browser.loadSessionFile(options)
-            // if (options.parentApp``) {
-            //     session.parentApp = options.parentApp
-            // }
         } else {
             session = options
         }
@@ -415,7 +420,7 @@ class Browser {
         } else {
             let filename = options.filename
             if (!filename) {
-                filename = (options.url ? await getFilename(options.url) : options.file.name)
+                filename = (options.url ? FileUtils.getFilename(options.url) : options.file.name)
             }
 
             if (filename.endsWith(".xml")) {
@@ -424,20 +429,17 @@ class Browser {
                 config = new XMLSession(string, knownGenomes)
 
             } else if (filename.endsWith("hub.txt")) {
-
-                const hub = await Hub.loadHub(urlOrFile, options)
+                const hub = await loadHub(urlOrFile, options)
                 const genomeConfig = hub.getGenomeConfig()
                 config = {
                     reference: genomeConfig
                 }
-            } else if (filename.endsWith(".json")) {
-                config = await igvxhr.loadJson(urlOrFile)
             } else {
-                throw Error("Unrecognized session file format:" + filename)
+                config = await igvxhr.loadJson(urlOrFile)
             }
         }
-        return setDefaults(config)
 
+        return config
     }
 
     /**
@@ -446,6 +448,9 @@ class Browser {
      * @returns {Promise<void>}
      */
     async loadSessionObject(session) {
+
+        // Capture current configuration options that might be missing from session
+        setDefaults(session, this.config)
 
         // prepare to load a new session, discarding DOM and state
         this.cleanHouseForSession()
@@ -465,8 +470,22 @@ class Browser {
             this.sampleNameViewportWidth = session.sampleNameViewportWidth
         }
 
+        // Track gear column
+        if (this.config.gearColumnPosition === 'left') {
+            const gearcolumn = createColumn(this.columnContainer, 'igv-gear-menu-column')
+            if (false === this.config.showGearColumn) {
+                gearcolumn.style.width = '0px'  // Don't use display none, need element to attach menu
+            }
+        }
+
         // axis column
-        createColumn(this.columnContainer, 'igv-axis-column')
+        const axisColumn = createColumn(this.columnContainer, 'igv-axis-column')
+        if (false === this.config.showAxis) {
+            axisColumn.style.display = 'none'
+        }
+        if (this.config.axisWidth !== undefined) {
+            axisColumn.style.width = this.config.axisWidth + 'px'
+        }
 
         // sample info column
         createColumn(this.columnContainer, 'igv-sample-info-column')
@@ -478,12 +497,20 @@ class Browser {
         createColumn(this.columnContainer, 'igv-scrollbar-column')
 
         // Track drag/reorder column
-        createColumn(this.columnContainer, 'igv-track-drag-column')
+        const dragColumn = createColumn(this.columnContainer, 'igv-track-drag-column')
+        if (false === this.config.showTrackDragHandles) {
+            dragColumn.style.display = 'none'
+        }
 
         // Track gear column
-        createColumn(this.columnContainer, 'igv-gear-menu-column')
+        if (this.config.gearColumnPosition !== 'left') {
+            const gearcolumn = createColumn(this.columnContainer, 'igv-gear-menu-column')
+            if (false === this.config.showGearColumn) {
+                gearcolumn.style.width = '0px'
+            }
+        }
 
-        const genomeOrReference = session.reference || session.genome
+        const genomeOrReference = session.reference || session.genome || session.genarkAccession
         if (!genomeOrReference) {
             console.warn("No genome or reference object specified")
             return
@@ -493,7 +520,7 @@ class Browser {
             await GenomeUtils.expandReference(this.alert, genomeOrReference) :
             genomeOrReference
 
-        await this.loadReference(genomeConfig, genomeConfig.locus || session.locus)
+        const genome = await this.loadReference(genomeConfig, genomeConfig.locus || session.locus)
 
         this.centerLineList = this.createCenterLineList(this.columnContainer)
 
@@ -516,12 +543,12 @@ class Browser {
         }
 
         // ROIs
-        if(session.showROIOverlays !== undefined) {
+        if (session.showROIOverlays !== undefined) {
             this.roiManager.showOverlays = session.showROIOverlays
         }
         this.roiManager.clearROIs()
         if (session.roi) {
-            this.roiManager.loadROI(session.roi)
+            this.roiManager.loadROI(session.roi, genome)
         } else {
             // Reset is called by loadROI, if no ROIs are loaded we need to call it explicitly
             await this.roiManager.reset()
@@ -529,19 +556,20 @@ class Browser {
 
         // Sample info
         const localSampleInfoFiles = []
+        const googleDriveSampleInfoFiles = []
         if (session.sampleinfo) {
-            for (const sampleInfoConfig of session.sampleinfo) {
-                // The "file" property is recorded in the session when a local file is referenced. It can't be used
-                // on reloading, its only purpose is to present an alert to the user.  This could also be used
-                // to prompt the user to load the file manually, but we don't currently do that.
+            const sampleInfoArray = Array.isArray(session.sampleinfo) ? session.sampleinfo : [session.sampleinfo]
+            for (const sampleInfoConfig of sampleInfoArray) {
                 if (sampleInfoConfig.file) {
                     localSampleInfoFiles.push(sampleInfoConfig.file)
                 } else {
-                    // this.loadSampleInfo(sampleInfoConfig)
-                    await this.sampleInfo.loadSampleInfo(sampleInfoConfig)
-
+                    const googleDriveItem = this.#createGoogleDriveItemIfPresent(sampleInfoConfig, 'Sample info', 'url', 'filename', 'Google Drive file')
+                    if (googleDriveItem) {
+                        googleDriveSampleInfoFiles.push(googleDriveItem)
+                    } else {
+                        await this.sampleInfo.loadSampleInfo(sampleInfoConfig)
+                    }
                 }
-
             }
         }
 
@@ -551,26 +579,44 @@ class Browser {
 
         // Ensure that we always have a sequence track with no explicit URL (=> the reference genome sequence track)
         const pushSequenceTrack = trackConfigurations.filter(track => 'sequence' === track.type && !track.url && !track.fastaURL).length === 0
-        if (pushSequenceTrack /*&& false !== this.config.showSequence*/) {
+        if (pushSequenceTrack && false !== this.config.showSequence) {
             trackConfigurations.push({type: "sequence", order: defaultSequenceTrackOrder, removable: false})
         }
 
-        const localTrackFileNames = trackConfigurations.filter((config) => undefined !== config.file).map(({file}) => file)
+        // Extract problematic resources from track configurations
+        const { localFileItems, googleDriveItems } = this.#extractProblematicResources(
+            trackConfigurations,
+            localSampleInfoFiles,
+            googleDriveSampleInfoFiles
+        )
 
-        const localIndexFileNames = trackConfigurations.filter((config) => undefined !== config.indexFile).map(({indexFile}) => indexFile)
-        if (localIndexFileNames.length > 0) {
-            localTrackFileNames.push(...localIndexFileNames)
+        // Display warning if problematic resources are found
+        if (localFileItems.length > 0 || googleDriveItems.length > 0) {
+            let message = 'Local and Google Drive files cannot be loaded from a saved session. The following file(s) will not be restored with this session.\n\n'
+
+            // Add local file items
+            for (const item of localFileItems) {
+                message += `Local file name: ${item.fileName}\n`
+                message += `Track name: ${item.trackName}\n\n`
+
+            }
+
+            // Add Google Drive items
+            for (const item of googleDriveItems) {
+                message += `Google Drive file name: ${item.fileName}\n`
+                message += `Track name: ${item.trackName}\n\n`
+
+            }
+
+            alert(message)
         }
 
-        if (localSampleInfoFiles.length > 0) {
-            localTrackFileNames.push(...localSampleInfoFiles)
-        }
-
-        if (localTrackFileNames.length > 0) {
-            alert(`Local files cannot be loaded automatically.\nThis session contains references to these local files:\n${localTrackFileNames.map(str => `    ${str}`).join('\n')}`)
-        }
-
-        const nonLocalTrackConfigurations = trackConfigurations.filter((config) => undefined === config.file)
+        const nonLocalTrackConfigurations = trackConfigurations.filter((config) =>
+            undefined === config.file &&
+            undefined === config.indexFile &&
+            // Filter out tracks with Google Drive URLs in url/indexURL fields
+            !(config.url && isGoogleDriveURL(config.url)) &&
+            !(config.indexURL && isGoogleDriveURL(config.indexURL)))
 
         // Maintain track order unless explicitly set
         let trackOrder = 1
@@ -589,6 +635,12 @@ class Browser {
 
         await this.loadTrackList(nonLocalTrackConfigurations)
 
+        // If an initial locus is defined and represents a single basedo a "search" here.  This will force micro
+        // adjustments after width of track column(s) is known.  This can be an issue when the center gide is shown
+        // Without this adjustment the single base would be off center by a few pixels.
+        if (session.locus && Locus.isSingleBaseLocusString(session.locus)) {
+            await this.search(session.locus)
+        }
     }
 
     cleanHouseForSession() {
@@ -611,7 +663,7 @@ class Browser {
     }
 
     /**
-     * Load a reference genome object.  This includes the fasta, and optional cytoband, but no tracks.  This method
+     * Load a reference genome object.  This includes the sequence, and optional cytoband, but no tracks.  This method
      * is used by loadGenome and loadSession.
      *
      * @param genomeConfig
@@ -638,23 +690,31 @@ class Browser {
         this.navbar.updateGenome(genome)
 
         let locus = initialLocus || genome.initialLocus
-        if (Array.isArray(locus)) {
-            locus = locus.join(' ')
-        }
 
-        const locusFound = await this.search(locus, true)
-        if (!locusFound) {
-            throw new Error(`Cannot set initial locus ${locus}`)
+        if (typeof (locus.chr) !== "undefined" && typeof (locus.start) !== "undefined") {
+
+            // Locus explicitly an object, either {chr, start, end} or {chr, start, bpPerPixel), skip search,
+            // bug must still ensure chromosome is loaded
+            await this.genome.loadChromosome(locus.chr)
+            await this.updateLoci([locus], true)
+
+        } else {
+            if (Array.isArray(locus)) {
+                locus = locus.join(' ')
+            }
+
+            const locusFound = await this.search(locus, true)
+            if (!locusFound) {
+                console.error(`Cannot set initial locus ${locus}`)
+                if (locus !== genome.initialLocus) {
+                    await this.search(genome.initialLocus)
+                }
+            }
         }
 
         if (genomeChange) {
-            let trackConfigurations
-            if (genomeConfig.hubURL) {
-                // TODO -- refactor this so "hub" is not loaded twice
-                const hub = await Hub.loadHub(genomeConfig.hubURL)
-                trackConfigurations = hub.getGroupedTrackConfigurations()
-            }
-            this.fireEvent('genomechange', [{genome, trackConfigurations}])
+
+            this.fireEvent('genomechange', [{genome}])
 
             if (this.circularView) {
                 this.circularView.setAssembly({
@@ -664,6 +724,16 @@ class Browser {
                 })
             }
         }
+        return genome
+    }
+
+    async expandGenarkAccession(genarkAccession) {
+
+        const url = convertToHubURL(genarkAccession)
+        const hub = await loadHub(url)
+        const genomeConfig = hub.getGenomeConfig()
+        genomeConfig.nameSet = "ucsc"
+        return genomeConfig
     }
 
     /**
@@ -675,31 +745,33 @@ class Browser {
      */
     async loadGenome(idOrConfig) {
 
-        if (idOrConfig.genarkAccession) {
-            idOrConfig.url = convertToHubURL(idOrConfig.genarkAccession)
-        }
-
-        // Translate the generic "url" field, used by clients such as igv-webapp
-        if (idOrConfig.url) {
-            if (StringUtils.isString(idOrConfig.url) && idOrConfig.url.endsWith("/hub.txt")) {
-                idOrConfig.hubURL = idOrConfig.url
-                delete idOrConfig.url
-            } else if ("gbk" === getFileExtension(idOrConfig.url)) {
-                idOrConfig.gbkURL = idOrConfig.url
-                delete idOrConfig.url
-            }
-        }
-
         let genomeConfig
-        const isHubGenome = idOrConfig.hubURL || (idOrConfig.url && StringUtils.isString(idOrConfig.url) && idOrConfig.url.endsWith("/hub.txt"))
-        if (isHubGenome) {
-            const hub = await Hub.loadHub(idOrConfig.hubURL || idOrConfig.url, idOrConfig)
-            genomeConfig = hub.getGenomeConfig()
-        } else if (StringUtils.isString(idOrConfig) || !(idOrConfig.url || idOrConfig.fastaURL || idOrConfig.twoBitURL || idOrConfig.gbkURL)) {
-            // Either an ID, a json string, or an object missing required properties.
-            genomeConfig = await GenomeUtils.expandReference(this.alert, idOrConfig)
+
+        if (idOrConfig.genarkAccession) {
+            genomeConfig = await this.expandGenarkAccession(idOrConfig.genarkAccession)
         } else {
-            genomeConfig = idOrConfig
+            // Translate the generic "url" field, used by clients such as igv-webapp
+            if (idOrConfig.url) {
+                if (StringUtils.isString(idOrConfig.url) && idOrConfig.url.endsWith("/hub.txt")) {
+                    idOrConfig.hubURL = idOrConfig.url
+                    delete idOrConfig.url
+                } else if ("gbk" === getFileExtension(idOrConfig.url)) {
+                    idOrConfig.gbkURL = idOrConfig.url
+                    delete idOrConfig.url
+                }
+            }
+
+
+            const isHubGenome = idOrConfig.hubURL || (idOrConfig.url && StringUtils.isString(idOrConfig.url) && idOrConfig.url.endsWith("/hub.txt"))
+            if (isHubGenome) {
+                const hub = await loadHub(idOrConfig.hubURL || idOrConfig.url, idOrConfig)
+                genomeConfig = hub.getGenomeConfig()
+            } else if (StringUtils.isString(idOrConfig) || !(idOrConfig.url || idOrConfig.fastaURL || idOrConfig.twoBitURL || idOrConfig.gbkURL)) {
+                // Either an ID, a json string, or an object missing required properties.
+                genomeConfig = await GenomeUtils.expandReference(this.alert, idOrConfig)
+            } else {
+                genomeConfig = idOrConfig
+            }
         }
 
         await this.loadReference(genomeConfig)
@@ -724,17 +796,6 @@ class Browser {
         await this.loadTrackList(tracks)
 
         return this.genome
-    }
-
-    /**
-     * Load a UCSC single-file genome assembly hub.
-     * @param options
-     * @returns {Promise<void>}
-     */
-    async loadTrackHub(options) {
-        const hub = await Hub.loadHub(options.url, options)
-        const genomeConfig = setDefaults(hub.getGenomeConfig())
-        return this.loadGenome(genomeConfig)
     }
 
     /**
@@ -824,33 +885,40 @@ class Browser {
      */
     async loadTrackList(configList) {
 
-        // Impose an order if not specified
-        let order = this.trackViews.length + 1
-        for (let c of configList) {
-            if (c.order === undefined) {
-                c.order = order++
+        try {
+            this.startSpinner()   // TODO this.startSpinner() when we have one
+
+            // Impose an order if not specified
+            let order = this.trackViews.length + 1
+            for (let c of configList) {
+                if (c.order === undefined) {
+                    c.order = order++
+                }
             }
+
+            const promises = []
+            for (const config of configList) {
+                promises.push(this.#loadTrackHelper(config))
+            }
+
+            const loadedTracks = await Promise.all(promises)
+
+            // If any tracks are selected show the selection buttons
+            if (this.trackViews.some(({track}) => track.selected)) {
+                this.navbar.setEnableTrackSelection(true)
+            }
+
+            this.reorderTracks()
+
+            await resize.call(this)
+
+            this.fireEvent('trackorderchanged', [this.getTrackOrder()])
+
+            return loadedTracks
+
+        } finally {
+            this.stopSpinner()   // TODO  this.stopSpinner()
         }
-
-        const promises = []
-        for (const config of configList) {
-            promises.push(this.#loadTrackHelper(config))
-        }
-
-        const loadedTracks = await Promise.all(promises)
-
-        // If any tracks are selected show the selection buttons
-        if (this.trackViews.some(({ track }) => track.selected)) {
-            this.navbar.setEnableTrackSelection(true)
-        }
-
-        this.reorderTracks()
-
-        await resize.call(this)
-
-        this.fireEvent('trackorderchanged', [this.getTrackOrder()])
-
-        return loadedTracks
     }
 
     /**
@@ -864,7 +932,7 @@ class Browser {
     async loadTrack(config) {
 
         const loadedTracks = await this.loadTrackList([config])
-        if(config.autoscaleGroup) {
+        if (config.autoscaleGroup) {
             this.updateViews()
         }
         return loadedTracks[0]
@@ -877,9 +945,14 @@ class Browser {
             config = JSON.parse(config)
         }
 
+        if (config.format && config.format.toLowerCase() === 'sampleinfo') {
+            return this.loadSampleInfo(config)
+        }
+
         let track
         try {
             track = await this.createTrack(config)
+
         } catch (error) {
 
             let msg = error.message || error.error || error.toString()
@@ -901,12 +974,12 @@ class Browser {
             throw err
         }
 
+
         if (track) {
             return await this.addTrack(track)
         } else {
             return undefined
         }
-
     }
 
     async addTrack(track) {
@@ -916,18 +989,15 @@ class Browser {
             track.order = this.trackViews.length
         }
 
+        if (typeof track.postInit === 'function') {
+            await track.postInit()
+        }
+
+        // Add track view AFTER postInit, to avoid adding a track that fails during postInit
         const trackView = new TrackView(this, this.columnContainer, track)
         this.trackViews.push(trackView)
         toggleTrackLabels(this.trackViews, this.doShowTrackLabels)
 
-        if (typeof track.postInit === 'function') {
-            try {
-                trackView.startSpinner()
-                await track.postInit()
-            } finally {
-                trackView.stopSpinner()
-            }
-        }
 
         if (typeof track.hasSamples === 'function' && track.hasSamples()) {
 
@@ -1035,15 +1105,6 @@ class Browser {
             // If neither format nor type are known throw an error
             if (!config.format) {
                 throw Error(`Unrecognized track:  ${JSON.stringify(config)}`)
-            } else if (config.format === "hic") {
-                const hicFile = new HicFile(config)
-                await hicFile.readHeaderAndFooter()
-                if (hicFile.chromosomeIndexMap.celltype) {
-                    type = "shoebox"
-                    config._hicFile = hicFile
-                } else {
-                    throw Error("'.hic' files not supported")
-                }
             } else {
                 type = TrackUtils.inferTrackType(config.format)
                 if ("bedtype" === type) {
@@ -1051,7 +1112,7 @@ class Browser {
                     const featureSource = FeatureSource(config, this.genome)
                     config._featureSource = featureSource    // This is a temp variable, bit of a hack
                     const trackType = await featureSource.trackType()
-                    if (trackType) {
+                    if (trackType && knownTrackTypes().has(trackType)) {
                         type = trackType
                     } else {
                         type = "annotation"
@@ -1323,7 +1384,7 @@ class Browser {
 
         this.updateLocusSearchWidget()
 
-        for (const { bpPerPixel, chr, start } of this.referenceFrameList) {
+        for (const {bpPerPixel, chr, start} of this.referenceFrameList) {
             if (bpPerPixel <= bppSequenceThreshold) {
                 await this.genome.getSequence(chr, start, start + 1)
             }
@@ -1392,9 +1453,9 @@ class Browser {
             referenceFrame.end = referenceFrame.start + referenceFrame.bpPerPixel * width
         }
 
-        const chrName = referenceFrameList.length === 1 ? this.referenceFrameList[0].chr : ''
-
         const loc = this.referenceFrameList.map(rf => rf.getLocusString()).join(' ')
+
+        const chrName = referenceFrameList.length === 1 ? this.genome.getChromosomeDisplayName(this.referenceFrameList[0].chr) : ''
 
         this.navbar.updateLocus(loc, chrName)
 
@@ -1405,7 +1466,16 @@ class Browser {
 
         let {width} = this.columnContainer.getBoundingClientRect()
 
-        width -= igv_axis_column_width + this.getSampleInfoViewportWidth() + this.getSampleNameViewportWidth() + igv_scrollbar_outer_width + igv_track_manipulation_handle_width + igv_track_gear_menu_column_width
+        const sampleInfoViewportWidth = this.getSampleInfoViewportWidth()
+        const sampleNameViewportWidth = this.getSampleNameViewportWidth()
+
+        width -=
+            (this.config.showAxis === false ? 0 : igv_axis_column_width) +
+            sampleInfoViewportWidth +
+            sampleNameViewportWidth +
+            igv_scrollbar_outer_width +
+            (this.config.showTrackDragHandles === false ? 0 : igv_track_manipulation_handle_width) +
+            (this.config.showGearColumn === false ? 0 : igv_track_gear_menu_column_width)
 
         width -= column_multi_locus_shim_width * (columnCount - 1)
 
@@ -1453,20 +1523,24 @@ class Browser {
     }
 
     minimumBases() {
-        return this.config.minimumBases
+        return this.config.minimumBases ?? 40
     }
 
     // Zoom in by a factor of 2, keeping the same center location
     zoomIn() {
         this.zoomWithScaleFactor(0.5)
-    };
+    }
+
 
     // Zoom out by a factor of 2, keeping the same center location if possible
     zoomOut() {
         this.zoomWithScaleFactor(2.0)
-    };
+    }
+
 
     async zoomWithScaleFactor(scaleFactor, centerBPOrUndefined, referenceFrameOrUndefined) {
+
+        if (this.config.disableZoom === true) return   // Useful when an embedding application wants to control zooming
 
         if (!this.referenceFrameList) return
 
@@ -1477,6 +1551,8 @@ class Browser {
         for (let referenceFrame of referenceFrames) {
             referenceFrame.zoomWithScaleFactor(this, scaleFactor, viewportWidth, centerBPOrUndefined)
         }
+
+        this.fireEvent("zoom", [referenceFrames])
     }
 
     /**
@@ -1505,7 +1581,7 @@ class Browser {
         // TODO -- this is really ugly
         const {viewportElement} = this.trackViews[0].viewports[indexLeft]
         const viewportColumn = viewportColumnManager.insertAfter(viewportElement.parentElement)
-        this.fireEvent('didchangecolumnlayout')
+        this.fireEvent('columnlayoutchange')
 
         if (indexRight === this.referenceFrameList.length) {
             this.referenceFrameList.push(newReferenceFrame)
@@ -1551,7 +1627,7 @@ class Browser {
         const {viewportElement} = this.trackViews[0].viewports[index]
 
         viewportColumnManager.removeColumnAtIndex(index, viewportElement.parentElement)
-        this.fireEvent('didchangecolumnlayout')
+        this.fireEvent('columnlayoutchange')
 
         for (let {viewports} of this.trackViews) {
             viewports[index].dispose()
@@ -1639,27 +1715,10 @@ class Browser {
     }
 
     /**
-     * @deprecated  This is a deprecated method with no known usages.  To be removed in a future release.
+     * @deprecated  This is a deprecated method with no known usages.
      */
     async goto(chr, start, end) {
         await this.search(chr + ":" + start + "-" + end)
-    }
-
-    /**
-
-     * Search for the locus string -- this function is called from various igv.js GUI elements, and is not part of the
-     * API.  Wraps ```search``` and presents an error dialog if false.
-     *
-     * @param string
-     * @param init
-     * @returns {Promise<void>}
-     */
-    async doSearch(string, init) {
-        const success = await this.search(string, init)
-        if (!success) {
-            this.alert.present(new Error(`Unrecognized locus: <b> ${string} </b>`))
-        }
-        return success
     }
 
 
@@ -1674,6 +1733,10 @@ class Browser {
     async search(stringOrArray, init) {
 
         const loci = await search(this, stringOrArray)
+        return this.updateLoci(loci, init)
+    }
+
+    async updateLoci(loci, init) {
 
         if (loci && loci.length > 0) {
 
@@ -1690,9 +1753,9 @@ class Browser {
 
             // Insert viewport columns preceding the sample info column
             viewportColumnManager.insertBefore(this.columnContainer.querySelector('.igv-sample-info-column'), this.referenceFrameList.length)
-            this.fireEvent('didchangecolumnlayout')
+            this.fireEvent('columnlayoutchange')
 
-            // Create the viewport objects
+            // Create the viewport objects -- TODO -- this is done for every search, which is insane
             for (let trackView of this.trackViews) {
                 trackView.createViewports(this, this.columnContainer, this.referenceFrameList)
             }
@@ -1712,7 +1775,14 @@ class Browser {
 
     async loadSampleInfo(sampleInfoConfig) {
 
+
         await this.sampleInfo.loadSampleInfo(sampleInfoConfig)
+
+        if (this.config.sampleinfo) {
+            this.config.sampleinfo.push(sampleInfoConfig)
+        } else {
+            this.config.sampleinfo = [sampleInfoConfig]
+        }
 
         for (const {sampleInfoViewport} of this.trackViews) {
             sampleInfoViewport.setWidth(this.getSampleInfoColumnWidth())
@@ -1729,6 +1799,27 @@ class Browser {
         }
 
         // await this.layoutChange()
+    }
+
+    async discardSampleInfo() {
+
+        this.sampleInfo.discard()
+
+        for (const {sampleInfoViewport} of this.trackViews) {
+            sampleInfoViewport.setWidth(this.getSampleInfoColumnWidth())
+        }
+
+        const found = this.findTracks(t => typeof t.getSamples === 'function')
+        if (found.length > 0) {
+            this.sampleInfoControl.performClickWithState(this, false)
+            this.sampleInfoControl.setButtonVisibility(false)
+        }
+
+        for (const {sampleInfoViewport} of this.trackViews) {
+            sampleInfoViewport.repaint()
+        }
+
+        await this.layoutChange()
     }
 
     getSampleInfoColumnWidth() {
@@ -1752,14 +1843,11 @@ class Browser {
     }
 
 
-// EVENTS
+    // IGV events (not DOM events)
 
     on(eventName, fn) {
-        if (!this.eventHandlers[eventName]) {
-            this.eventHandlers[eventName] = []
-        }
-        this.eventHandlers[eventName].push(fn)
-    };
+        this.eventEmitter.on(eventName, fn)
+    }
 
     /**
      * @deprecated use off()
@@ -1767,42 +1855,16 @@ class Browser {
      * @param fn
      */
     un(eventName, fn) {
-        this.off(eventName, fn)
-    };
+        this.eventEmitter.off(eventName, fn)
+    }
+
 
     off(eventName, fn) {
-
-        if (!eventName) {
-            this.eventHandlers = {}   // Remove all event handlers
-        } else if (!fn) {
-            this.eventHandlers[eventName] = [] // Remove all eventhandlers matching name
-        } else {
-            // Remove specific event handler
-            const handlers = this.eventHandlers[eventName]
-            if (!handlers || handlers.length === 0) {
-                console.warn("No handlers to remove for event: " + eventName)
-            } else {
-                const callbackIndex = handlers.indexOf(fn)
-                if (callbackIndex !== -1) {
-                    this.eventHandlers[eventName].splice(callbackIndex, 1)
-                }
-            }
-        }
+        this.eventEmitter.off(eventName, fn)
     }
 
     fireEvent(eventName, args, thisObj) {
-
-        const handlers = this.eventHandlers[eventName]
-        if (undefined === handlers || handlers.length === 0) {
-            return undefined
-        }
-
-        const scope = thisObj || window
-        const results = handlers.map(function (event) {
-            return event.apply(scope, args)
-        })
-
-        return results[0]
+        return this.eventEmitter.emit(eventName, args, thisObj)
     }
 
     dispose() {
@@ -1834,11 +1896,6 @@ class Browser {
         }
 
         json["reference"] = this.genome.toJSON()
-        if (json.reference.fastaURL instanceof File) {   // Test specifically for File.  Other types of File-like objects might be savable) {
-            throw new Error(`Error. Sessions cannot include local file references ${json.reference.fastaURL.name}.`)
-        } else if (json.reference.indexURL instanceof File) {   // Test specifically for File.  Other types of File-like objects might be savable) {
-            throw new Error(`Error. Sessions cannot include local file references ${json.reference.indexURL.name}.`)
-        }
 
         // Build locus array (multi-locus view).  Use the first track to extract the loci, any track could be used.
         const locus = []
@@ -1850,9 +1907,9 @@ class Browser {
         json["locus"] = locus.length === 1 ? locus[0] : locus
 
         const roiSets = this.roiManager.toJSON()
-        if(roiSets) {
+        if (roiSets) {
             json["roi"] = roiSets
-            if(!this.roiManager.showOverlays){
+            if (!this.roiManager.showOverlays) {
                 json["showROIOverlays"] = false   // true is the default
             }
         }
@@ -1860,6 +1917,16 @@ class Browser {
         if (!this.qtlSelections.isEmpty()) {
             json["qtlSelections"] = this.qtlSelections.toJSON()
         }
+
+        // Filter configurations
+        // REMOVED: Filter configurations are now saved as part of individual track configurations
+        // if (this.filterConfigurations.size > 0) {
+        //     const filterConfigs = {}
+        //     for (const [trackType, filters] of this.filterConfigurations) {
+        //         filterConfigs[trackType] = filters
+        //     }
+        //     json["filterConfigurations"] = filterConfigs
+        // }
 
         // Tracks
         const trackJson = []
@@ -1869,9 +1936,9 @@ class Browser {
 
                 let config
                 if (typeof track.getState === "function") {
-                    config = TrackBase.localFileInspection(track.getState())
+                    config = TrackBase.prepareConfigForSession(track.getState())
                 } else if (track.config) {
-                    config = TrackBase.localFileInspection(track.config)
+                    config = TrackBase.prepareConfigForSession(track.config)
                 }
 
                 if (config) {
@@ -1902,40 +1969,214 @@ class Browser {
 
         json["tracks"] = trackJson
 
-        const localFileDetections = []
-        for (const json of trackJson) {
-            for (const key of Object.keys(json)) {
-                if ('file' === key || 'indexFile' === key) {
-                    localFileDetections.push(json[key])
-                }
-            }
-        }
-
         // Sample info
-        const localSampleInfoFileDetections = []
-        if (this.sampleInfo.sampleInfoFiles.length > 0) {
-
-            const si = this.sampleInfo.toJSON()
-            if (si.length > 0) {
-                json["sampleinfo"] = si
-            }
-
-            for (const path of this.sampleInfo.sampleInfoFiles) {
-                const config = TrackBase.localFileInspection({url: path})
-                if (config.file) {
-                    localSampleInfoFileDetections.push(config.file)
-                }
-            }
-            if (localSampleInfoFileDetections.length > 0) {
-                localFileDetections.push(...localSampleInfoFileDetections)
-            }
+        if (this.config.sampleinfo) {
+            json["sampleinfo"] = this.config.sampleinfo
         }
 
-        if (localFileDetections.length > 0) {
-            alert(`This session includes reference(s) to local file(s):\n${localFileDetections.map(str => `    ${str}`).join('\n')}\nLocal files cannot be loaded automatically when a saved session is restored.`)
-        }
+        // Validate reference genome and warn about problematic resources
+        this._validateAndWarnResources(json)
 
         return json
+    }
+
+    /**
+     * Get a display identifier for a Google Drive file.
+     * Returns the provided filename if available, otherwise falls back to a default string.
+     * Note: Filenames should always be present in saved sessions since Google Drive files
+     * can only be added when the user is authenticated.
+     *
+     * @param {string|undefined} filename - The filename property from the config (e.g., config.filename or config.indexFilename)
+     * @param {string} defaultFallback - Default identifier to use if filename is not provided
+     * @returns {string} A display identifier (filename or fallback string)
+     * @private
+     */
+    #getGoogleDriveDisplayName(filename, defaultFallback = 'Google Drive file') {
+        return filename || defaultFallback
+    }
+
+    /**
+     * Check if a config has a Google Drive URL and create a Google Drive item if found.
+     *
+     * @param {Object} config - Track configuration object
+     * @param {string} trackName - Name of the track
+     * @param {string} urlField - Field name to check ('url' or 'indexURL')
+     * @param {string} filenameField - Field name for filename ('filename' or 'indexFilename')
+     * @param {string} defaultFileName - Default filename if not found
+     * @returns {Object|null} Google Drive item object or null if not a Google Drive URL
+     * @private
+     */
+    #createGoogleDriveItemIfPresent(config, trackName, urlField, filenameField, defaultFileName) {
+        const url = config[urlField]
+        if (url && isGoogleDriveURL(url)) {
+            const fileName = this.#getGoogleDriveDisplayName(config[filenameField], defaultFileName)
+            return {
+                trackName: trackName,
+                fileName: fileName
+            }
+        }
+        return null
+    }
+
+    /**
+     * Extract Google Drive items from a track configuration (checks both url and indexURL).
+     *
+     * @param {Object} config - Track configuration object
+     * @returns {Array} Array of Google Drive items found in this config
+     * @private
+     */
+    #extractGoogleDriveItemsFromConfig(config) {
+        const items = []
+        const trackName = config.name || 'Unnamed track'
+
+        // Check main file URL
+        const mainItem = this.#createGoogleDriveItemIfPresent(config, trackName, 'url', 'filename', 'Google Drive file')
+        if (mainItem) {
+            items.push(mainItem)
+        }
+
+        // Check index file URL
+        const indexItem = this.#createGoogleDriveItemIfPresent(config, `${trackName} index`, 'indexURL', 'indexFilename', 'Google Drive index file')
+        if (indexItem) {
+            items.push(indexItem)
+        }
+
+        return items
+    }
+
+    /**
+     * Extract problematic resources (local files and Google Drive files) from track configurations.
+     * Google Drive files are detected by checking if the url/indexURL fields contain Google Drive URLs,
+     * using the isGoogleDriveURL helper function from sessionResourceValidator.
+     *
+     * @param {Array} trackConfigurations - Array of track configuration objects
+     * @param {Array} localSampleInfoFiles - Array of local sample info filenames
+     * @param {Array} googleDriveSampleInfoFiles - Array of Google Drive sample info items (objects with trackName and fileName)
+     * @returns {{localFileItems: Array, googleDriveItems: Array}} Object containing arrays of problematic resources
+     * @private
+     */
+    #extractProblematicResources(trackConfigurations, localSampleInfoFiles = [], googleDriveSampleInfoFiles = []) {
+        const localFileItems = []
+        const googleDriveItems = []
+
+        // Collect local files from track configurations
+        for (const config of trackConfigurations) {
+            const trackName = config.name || 'Unnamed track'
+            if (config.file) {
+                localFileItems.push({
+                    trackName: trackName,
+                    fileName: config.file
+                })
+            }
+            if (config.indexFile) {
+                localFileItems.push({
+                    trackName: `${trackName} index`,
+                    fileName: config.indexFile
+                })
+            }
+        }
+
+        // Add sample info local files
+        for (const fileName of localSampleInfoFiles) {
+            localFileItems.push({
+                trackName: 'Sample info',
+                fileName: fileName
+            })
+        }
+
+        // Collect Google Drive files by checking if url/indexURL fields contain Google Drive URLs
+        for (const config of trackConfigurations) {
+            const items = this.#extractGoogleDriveItemsFromConfig(config)
+            googleDriveItems.push(...items)
+        }
+
+        // Add sample info Google Drive files
+        googleDriveItems.push(...googleDriveSampleInfoFiles)
+
+        return { localFileItems, googleDriveItems }
+    }
+
+    /**
+     * Validate reference genome and warn about problematic resources in the session.
+     *
+     * Reference genome: Throws error if local files or Google Drive URLs are detected
+     * Tracks/Sample Info: Shows warning if local files or Google Drive URLs are detected
+     *
+     * @param {Object} json - The session JSON object
+     * @private
+     */
+    _validateAndWarnResources(json) {
+        // 1. Validate reference genome (blocking errors)
+        const refErrors = []
+
+        if (json.reference.fastaURL) {
+            if (isLocalFile(json.reference.fastaURL)) {
+                refErrors.push(`Local file: ${json.reference.fastaURL.name}`)
+            } else if (isGoogleDriveURL(json.reference.fastaURL)) {
+                refErrors.push(`Google Drive URL: ${json.reference.fastaURL}`)
+            }
+        }
+
+        if (json.reference.indexURL) {
+            if (isLocalFile(json.reference.indexURL)) {
+                refErrors.push(`Local file: ${json.reference.indexURL.name}`)
+            } else if (isGoogleDriveURL(json.reference.indexURL)) {
+                refErrors.push(`Google Drive URL: ${json.reference.indexURL}`)
+            }
+        }
+
+        if (refErrors.length > 0) {
+            throw new Error(
+                `Error: Sessions cannot include the following resources in the reference genome:\n` +
+                refErrors.map(err => `  - ${err}`).join('\n') + '\n' +
+                `These resources require local access or authentication and will not work when the session is shared.`
+            )
+        }
+
+        // 2. Collect warnings from tracks and sample info
+        const localSampleInfoFiles = []
+        const googleDriveSampleInfoFiles = []
+
+        // Check sample info
+        if (this.config.sampleinfo) {
+            for (const path of this.sampleInfo.sampleInfoFiles) {
+                const config = TrackBase.prepareConfigForSession({url: path})
+                if (config.file) {
+                    localSampleInfoFiles.push(config.file)
+                }
+                // Check if the url field contains a Google Drive URL
+                const googleDriveItem = this.#createGoogleDriveItemIfPresent(config, 'Sample info', 'url', 'filename', 'Google Drive file')
+                if (googleDriveItem) {
+                    googleDriveSampleInfoFiles.push(googleDriveItem)
+                }
+            }
+        }
+
+        // Extract problematic resources from tracks
+        const { localFileItems, googleDriveItems } = this.#extractProblematicResources(
+            json.tracks || [],
+            localSampleInfoFiles,
+            googleDriveSampleInfoFiles
+        )
+
+        // 3. Display consolidated warning if any issues found
+        if (localFileItems.length > 0 || googleDriveItems.length > 0) {
+            let message = 'Local and Google Drive files cannot be loaded automatically when a saved session is restored. This session saves references to the following file(s) that will not be restored.\n\n'
+
+            // Add local file items
+            for (const item of localFileItems) {
+                message += `Local file name: ${item.fileName}\n`
+                message += `Track name: ${item.trackName}\n\n`
+            }
+
+            // Add Google Drive items
+            for (const item of googleDriveItems) {
+                message += `Google Drive file name: ${item.fileName}\n`
+                message += `Track name: ${item.trackName}\n\n`
+            }
+
+            alert(message)
+        }
     }
 
     compressedSession() {
@@ -1970,7 +2211,8 @@ class Browser {
             mouseDownY: coords.y,
             referenceFrame: viewport.referenceFrame
         }
-    };
+    }
+
 
     cancelTrackPan() {
 
@@ -2196,10 +2438,6 @@ class Browser {
     }
 
     // Navbar delegates
-    get sampleInfoControl() {
-        return this.navbar.sampleInfoControl
-    }
-
     get overlayTrackButton() {
         return this.navbar.overlayTrackButton
     }
@@ -2208,20 +2446,35 @@ class Browser {
         return this.navbar.roiTableControl
     }
 
-    get sampleInfoControl() {
-        return this.navbar.sampleInfoControl
-    }
-
     get sampleNameControl() {
         return this.navbar.sampleNameControl
     }
 
-    async blat(sequence) {
-        return createBlatTrack({sequence, browser: this, name: 'Blat', title: 'Blat' })
+    get sampleInfoControl() {
+        return this.navbar.sampleInfoControl
     }
+
+    async blat(sequence) {
+        return createBlatTrack({sequence, browser: this, name: 'Blat', title: 'Blat'})
+    }
+
+    startSpinner() {
+        if (this.spinnerElement) {
+            this.spinnerElement.style.display = 'flex'
+        }
+    }
+
+    stopSpinner() {
+        if (this.spinnerElement) {
+            this.spinnerElement.style.display = 'none'
+        }
+    }
+
 }
 
-function getFileExtension(input) {
+function
+
+getFileExtension(input) {
     let fileName
 
     // Check if input is a File object or a URL string
@@ -2250,7 +2503,9 @@ function getFileExtension(input) {
  *
  * @returns {Promise<void>}
  */
-async function resize() {
+async function
+
+resize(event) {
 
     if (undefined === this.referenceFrameList || 0 === this.referenceFrameList.length) {
         return
@@ -2263,7 +2518,9 @@ async function resize() {
 }
 
 
-function handleMouseMove(e) {
+function
+
+handleMouseMove(e) {
 
     e.preventDefault()
 
@@ -2300,13 +2557,13 @@ function handleMouseMove(e) {
             if (viewChanged) {
                 this.updateViews()
             }
-            this.fireEvent('trackdrag')
+            this.fireEvent('trackdrag', [e])
         }
 
 
         if (this.isScrolling) {
-            const delta = this.vpMouseDown.r * (this.vpMouseDown.lastMouseY - y)
-            viewport.trackView.moveScroller(delta)
+            const delta = (this.vpMouseDown.lastMouseY - y)
+            viewport.trackView.scrollByPixels(delta)
         }
 
 
@@ -2315,7 +2572,9 @@ function handleMouseMove(e) {
     }
 }
 
-function mouseUpOrLeave(e) {
+function
+
+mouseUpOrLeave(e) {
     this.cancelTrackPan()
     this.endTrackDrag()
 }
@@ -2324,7 +2583,9 @@ function mouseUpOrLeave(e) {
  * Handle keyup event, used for navigating feature tracks with hot keys.  This will get bound to the browser object
  * @param event
  */
-async function keyUpHandler(event) {
+async function
+
+keyUpHandler(event) {
 
     // Feature jumping disabled in multi-locus view
     if (!this.referenceFrameList || this.referenceFrameList.length > 1) return
@@ -2402,15 +2663,17 @@ async function keyUpHandler(event) {
     }
 }
 
-function toggleTrackLabels(trackViews, isVisible) {
+function
+
+toggleTrackLabels(trackViews, isVisible) {
 
     for (let {viewports} of trackViews) {
         for (let viewport of viewports) {
             if (viewport.trackLabelElement) {
                 if (0 === viewports.indexOf(viewport) && true === isVisible) {
-                    viewport.trackLabelElement.style.display = 'block';
+                    viewport.trackLabelElement.style.display = 'block'
                 } else {
-                    viewport.trackLabelElement.style.display = 'none';
+                    viewport.trackLabelElement.style.display = 'none'
                 }
             }
         }

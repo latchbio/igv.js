@@ -1,32 +1,8 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2018 Regents of the University of California
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import {isSimpleType} from "./util/igvUtils.js"
-import {FileUtils, StringUtils, FeatureUtils} from "../node_modules/igv-utils/src/index.js"
+import {FeatureUtils, FileUtils, StringUtils} from "../node_modules/igv-utils/src/index.js"
 import {createCheckbox} from "./igv-icons.js"
 import {findFeatureAfterCenter} from "./feature/featureUtils.js"
+import {isLocalFile} from "./util/sessionResourceValidator.js"
 
 const fixColor = (colorString) => {
     if (StringUtils.isString(colorString)) {
@@ -127,16 +103,17 @@ class TrackBase {
                 this.description = () => config.description
             }
         }
-
-        // Support for mouse hover text.  This can be expensive, off by default.
-        // this.hoverText = function(clickState) => return tool tip text
-        if (config.hoverTextFields) {
-            this.hoverText = hoverText.bind(this)
-        } else if (typeof this.config.hoverText === 'function') {
-            this.hoverText = this.config.hoverText
-        }
     }
 
+    /**
+     * Perform any async initialization steps.  This method is typically overriden in subclasses, which will call
+     * this implementation as super.postInit().
+     *
+     * NOTE: postInit is called before the trackView is added to the browser track list.  If postInit throws an error
+     * the track will not be added to the browser.  This is important for error handling during track loading.
+     *
+     * @returns {Promise<TrackBase>}
+     */
     async postInit() {
 
         this._initialColor = this.color || this.constructor.defaultColor
@@ -479,23 +456,45 @@ class TrackBase {
      */
     description() {
 
-        const wrapKeyValue = (k, v) => `<div class="igv-track-label-popup-shim"><b>${k}: </b>${v}</div>`
+        const createKeyValueRow = (key, value) => {
+            const row = document.createElement('div')
+            row.className = 'igv-track-label-popover__row'
 
-        let str = '<div class="igv-track-label-popup">'
+            const keySpan = document.createElement('span')
+            keySpan.className = 'igv-track-label-popover__key'
+            keySpan.textContent = key + ':'
+
+            const valueSpan = document.createElement('span')
+            valueSpan.className = 'igv-track-label-popover__value'
+            valueSpan.textContent = value
+
+            row.appendChild(keySpan)
+            row.appendChild(valueSpan)
+            return row
+        }
+
+        const fragment = document.createDocumentFragment()
+
         if (this.url) {
             if (FileUtils.isFile(this.url)) {
-                str += wrapKeyValue('Filename', this.url.name)
+                fragment.appendChild(createKeyValueRow('Filename', this.url.name))
             } else {
-                str += wrapKeyValue('URL', this.url)
+                fragment.appendChild(createKeyValueRow('URL', this.url))
             }
         } else {
-            str = this.name
+            // If no URL, just return the name as a simple text node
+            const nameDiv = document.createElement('div')
+            nameDiv.className = 'igv-track-label-popover__row'
+            nameDiv.textContent = this.name
+            fragment.appendChild(nameDiv)
+            return fragment
         }
+
         if (this.config) {
             if (this.config.metadata) {
                 for (let key of Object.keys(this.config.metadata)) {
                     const value = this.config.metadata[key]
-                    str += wrapKeyValue(key, value)
+                    fragment.appendChild(createKeyValueRow(key, value))
                 }
             }
 
@@ -506,14 +505,13 @@ class TrackBase {
                 if (first !== first.toLowerCase()) {
                     const value = this.config[key]
                     if (value && isSimpleType(value)) {
-                        str += wrapKeyValue(key, value)
+                        fragment.appendChild(createKeyValueRow(key, value))
                     }
                 }
             }
-
         }
-        str += '</div>'
-        return str
+
+        return fragment
     }
 
     /**
@@ -630,7 +628,20 @@ class TrackBase {
         }
     }
 
-    static localFileInspection(config) {
+    /**
+     * Prepare a track configuration for session serialization by identifying and marking
+     * problematic resources (local files).
+     *
+     * Local files are converted to {file: filename} or {indexFile: filename}
+     * Google Drive URLs are kept in the url/indexURL fields as-is and detected when loading
+     *
+     * This allows the configuration to be serialized while preserving information
+     * about resources that cannot be automatically loaded when the session is restored.
+     *
+     * @param {Object} config - Track configuration to prepare
+     * @returns {Object} Cleaned configuration with problematic resources marked
+     */
+    static prepareConfigForSession(config) {
 
         const cooked = Object.assign({}, config)
         const lut =
@@ -639,8 +650,9 @@ class TrackBase {
                 indexURL: 'indexFile'
             }
 
+        // Check for local File objects and convert to filename strings
         for (const key of ['url', 'indexURL']) {
-            if (cooked[key] && cooked[key] instanceof File) {
+            if (cooked[key] && isLocalFile(cooked[key])) {
                 cooked[lut[key]] = cooked[key].name
                 delete cooked[key]
             }
@@ -650,8 +662,6 @@ class TrackBase {
     }
 
     // Methods to support filtering api
-
-
     set filter(f) {
         this._filter = f
         this.trackView.repaintViews()
@@ -694,39 +704,6 @@ class TrackBase {
      */
     getFilterableAttributes() {
         return {}
-    }
-}
-
-function hoverText(clickState) {
-
-    if (!this.hoverTextFields) return
-
-    const features = this.clickedFeatures(clickState)
-
-    if (features && features.length > 0) {
-        let str = ""
-        for (let i = 0; i < features.length; i++) {
-            if (i === 10) {
-                str += "; ..."
-                break
-            }
-            if (!features[i]) continue
-
-            const f = features[i]._f || features[i]
-            if (str.length > 0) str += "\n"
-
-            str = ""
-            for (let field of this.hoverTextFields) {
-                if (str.length > 0) str += "\n"
-                if (f.hasOwnProperty(field)) {
-                    str += f[field]
-                } else if (typeof f.getAttribute === "function") {
-                    str += f.getAttribute(field)
-                }
-            }
-
-        }
-        return str
     }
 }
 

@@ -1,6 +1,6 @@
 import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
 import Chromosome from "./chromosome.js"
-import {loadSequence} from "./fasta.js"
+import {loadSequence} from "./loadSequence.js"
 import ChromAliasBB from "./chromAliasBB.js"
 import ChromAliasFile from "./chromAliasFile.js"
 import CytobandFileBB from "./cytobandFileBB.js"
@@ -8,6 +8,14 @@ import CytobandFile from "./cytobandFile.js"
 
 import {loadChromSizes} from "./chromSizes.js"
 import ChromAliasDefaults from "./chromAliasDefaults.js"
+import {updateReference} from "./updateReference.js"
+import BWSource from "../bigwig/bwSource.js"
+
+const ucsdIDMap = new Map([
+    ["1kg_ref", "hg18"],
+    ["1kg_v37", "hg19"],
+    ["b37", "hg19"]
+])
 
 /**
  * The Genome class represents an assembly and consists of the following elements
@@ -24,6 +32,7 @@ class Genome {
 
     static async createGenome(options, browser) {
 
+        updateReference(options)
         const genome = new Genome(options, browser)
         await genome.init()
         return genome
@@ -33,6 +42,8 @@ class Genome {
         this.config = config
         this.browser = browser
         this.id = config.id || generateGenomeID(config)
+        this.ucscID = config.ucscID || ucsdIDMap.get(this.id) || this.id
+        this.blatDB = config.blatDB || this.ucscID
         this.name = config.name
         this.nameSet = config.nameSet
     }
@@ -42,50 +53,43 @@ class Genome {
 
         const config = this.config
 
+        // Load sequence
         this.sequence = await loadSequence(config, this.browser)
 
-        if (config.chromSizesURL) {
-            // a chromSizes file is neccessary for 2bit sequences for whole-genome view
+        // Load cytobands.  This is optional but required to support the ideogram.  Only needed for whole genome view
+        if (false !== config.showIdeogram && false !== config.wholeGenomeView) {
+            if (config.cytobandURL) {
+                this.cytobandSource = new CytobandFile(config.cytobandURL, Object.assign({}, config))
+            } else if (config.cytobandBbURL) {
+                this.cytobandSource = new CytobandFileBB(config.cytobandBbURL, Object.assign({}, config), this)
+            }
+        }
+
+        // Search for chromosomes, that is an array of chromosome objects containing name and length.  This is
+        // optional but required to support whole genome view.
+        if (this.sequence.chromosomes) {
+            this.chromosomes = this.sequence.chromosomes
+        } else if (config.chromSizesURL) {
             this.chromosomes = await loadChromSizes(config.chromSizesURL)
         } else {
-            // if the sequence defines chromosomes use them (fasta does, 2bit does not)
-            this.chromosomes = this.sequence.chromosomes || new Map()
+            this.chromosomes = new Map()   // Cache, chromosome are added as they are loaded
         }
 
-        if (this.chromosomes.size > 0) {
-            this.chromosomeNames = Array.from(this.chromosomes.keys())
-        } else if(this.sequence.chromosomeNames) {
+        // Search for chromosome names.  This is optional but required to support the chromosome pulldown
+        if (this.sequence.chromosomeNames) {
             this.chromosomeNames = this.sequence.chromosomeNames    // Twobit files can supply chromosome names unless they use an external index
+        } else if (this.chromosomes.size > 0) {
+            this.chromosomeNames = Array.from(this.chromosomes.keys())
         }
 
+        // Chromosome alias
         if (config.chromAliasBbURL) {
             this.chromAlias = new ChromAliasBB(config.chromAliasBbURL, Object.assign({}, config), this)
-            if (!this.chromosomeNames) {
-                this.chromosomeNames = await this.chromAlias.getChromosomeNames()
-            }
         } else if (config.aliasURL) {
             this.chromAlias = new ChromAliasFile(config.aliasURL, Object.assign({}, config), this)
         } else if (this.chromosomeNames) {
             this.chromAlias = new ChromAliasDefaults(this.id, this.chromosomeNames)
         }
-
-        if (config.cytobandBbURL) {
-            this.cytobandSource = new CytobandFileBB(config.cytobandBbURL, Object.assign({}, config), this)
-        } else if (config.cytobandURL) {
-            this.cytobandSource = new CytobandFile(config.cytobandURL, Object.assign({}, config))
-        }
-
-        // Last resort for chromosome information -- retrieve it from the cytoband source if supported
-        if (!this.chromosomeNames && this.cytobandSource && typeof this.cytobandSource.getChromosomeNames === 'function') {
-            this.chromosomeNames = await this.cytobandSource.getChromosomeNames()
-        }
-        if (this.chromosomes.size === 0 && this.cytobandSource && typeof this.cytobandSource.getChromosomes === 'function') {
-            const c = await this.cytobandSource.getChromosomes()
-            for (let chromosome of c) {
-                this.chromosomes.set(c.name, c)
-            }
-        }
-
 
         if (false !== config.wholeGenomeView && this.chromosomes.size > 0) {
             // Set chromosome order for WG view and chromosome pulldown.  If chromosome order is not specified sort
@@ -95,10 +99,14 @@ class Genome {
                 } else {
                     this.#wgChromosomeNames = config.chromosomeOrder.split(',').map(nm => nm.trim())
                 }
+                // Trim to remove non-existent chromosomes
+                await this.chromAlias.preload(this.#wgChromosomeNames)
+                this.#wgChromosomeNames =
+                    this.#wgChromosomeNames.map(c => this.getChromosomeName(c)).filter(c => this.chromosomes.has(c))
             } else {
                 this.#wgChromosomeNames = trimSmallChromosomes(this.chromosomes)
+                await this.chromAlias.preload(this.#wgChromosomeNames)
             }
-            await this.chromAlias.preload(this.#wgChromosomeNames)
         }
 
         // Optionally create the psuedo chromosome "all" to support whole genome view
@@ -193,18 +201,18 @@ class Genome {
             if (!aliasRecord && chr !== chr.toLowerCase()) {
                 aliasRecord = await this.chromAlias.search(chr.toLowerCase())
             }
-            if(aliasRecord) {
+            if (aliasRecord) {
                 // Add some aliases for case insensitivy
                 const upper = aliasRecord.chr.toUpperCase()
                 const lower = aliasRecord.chr.toLowerCase()
                 const cap = aliasRecord.chr.charAt(0).toUpperCase() + aliasRecord.chr.slice(1)
-                if(aliasRecord.chr !== upper) {
+                if (aliasRecord.chr !== upper) {
                     aliasRecord["_uppercase"] = upper
                 }
-                if(aliasRecord.chr !== lower) {
+                if (aliasRecord.chr !== lower) {
                     aliasRecord["_lowercase"] = lower
                 }
-                if(aliasRecord.chr !== cap) {
+                if (aliasRecord.chr !== cap) {
                     aliasRecord["_cap"] = cap
                 }
             }
@@ -334,6 +342,79 @@ class Genome {
             return this.sequence.getSequenceInterval(chr, start, end)
         } else {
             return undefined
+        }
+    }
+
+    getHubURLs() {
+        return this.config.hubs
+    }
+
+    /**
+     * Return the Mane transcript with the given name, or null if not found. We also check the refseq historical
+     * db if available for backward compatibility. This is only available for hg38.
+     * @param {string} name - The name of the Mane transcript to search for.
+     * @return {Promise<Object|null>} A Promise resolving to the Mane transcript object if found, or null otherwise.
+     */
+    async getManeTranscript(name) {
+
+        if (!this.maneFeatureSource && this.config.maneBbURL) {
+            this.loadManeFeatureSource()
+        }
+        if (this.maneFeatureSource) {
+            const feature = await this.maneFeatureSource.search(name)
+            if (feature) {
+                return feature
+            }
+        }
+        if (!this.rsDBFeatureSource && this.config.rsdbURL) {
+            this.rsDBFeatureSource = new BWSource({url: this.config.rsdbURL}, this)
+        }
+        if (this.rsDBFeatureSource) {
+            const feature = await this.rsDBFeatureSource.search(name)
+            if (feature) {
+                return feature
+            }
+        }
+        return null
+    }
+
+    /**
+     * Return the Mane transcript overlapping the given position, or null if none found.
+     *
+     * @param chr      Chromosome name (e.g., "chr1", "chrX") in which to search for the transcript.
+     * @param position Genomic position (0-based coordinate) to check for overlap with a Mane transcript.
+     * @return {Promise<*|null>} The feature representing the Mane transcript overlapping the specified position, or null if none is found.
+     */
+    async getManeTranscriptAt(chr, position) {
+        if (!this.maneFeatureSource && this.config.maneBbURL) {
+            this.loadManeFeatureSource()
+        }
+        if (this.maneFeatureSource) {
+            try {
+                const start = position
+                const end = position + 1
+                const features = await this.maneFeatureSource.getFeatures({chr, start, end})
+                if (features) {
+                    for (const feature of features) {
+                        if (feature.start <= position && feature.end >= position) {
+                            return feature
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Error fetching MANE transcript", e)
+            }
+        }
+        return null
+    }
+
+    loadManeFeatureSource() {
+        if (this.config.maneBbURL != null) {
+            const bbConfig = {url: this.config.maneBbURL}
+            if (this.config.maneTrixURL) {
+                bbConfig.trixURL = this.config.maneTrixURL
+            }
+            this.maneFeatureSource = new BWSource(bbConfig, this)
         }
     }
 }

@@ -49,18 +49,23 @@ class SampleInfo {
         return this.sampleDictionary[key]
     }
 
+    getAttributeValue(sampleName, attribute) {
+        const attributes = this.getAttributes(sampleName)
+        return attributes ? attributes[attribute] : undefined
+    }
+
     async loadSampleInfo(config) {
 
         if (config.url) {
             await this.loadSampleInfoFile(config.url)
         } else {
 
-            const samples = { ...config }
+            const samples = {...config}
             for (const [key, record] of Object.entries(samples)) {
                 samples[key] = SampleInfo.toNumericalRepresentation(record)
             }
 
-            const [ value ] = Object.values(samples)
+            const [value] = Object.values(samples)
             const attributes = Object.keys(value)
 
             this.loadSampleInfoHelper(attributes, samples)
@@ -70,7 +75,7 @@ class SampleInfo {
         this.initialized = true
     }
 
-    loadSampleInfoHelper(attributes, samples){
+    loadSampleInfoHelper(attributes, samples) {
 
         // Establish the range of values for each attribute
         const lut = createAttributeRangeLUT(attributes, samples)
@@ -89,13 +94,13 @@ class SampleInfo {
     }
 
     async loadSampleInfoFile(path) {
-        try {
-            const string = await igvxhr.loadString(path)
-            this.#processSampleInfoFileAsString(string)
-            this.sampleInfoFiles.push(path)
-        } catch (e) {
-            console.error(e.message)
-        }
+        const string = await igvxhr.loadString(path)
+        this.#processSampleInfoFileAsString(string)
+        this.sampleInfoFiles.push(path)
+    }
+
+    discard() {
+        this.initialize()
     }
 
     getAttributeColor(attribute, value) {
@@ -138,22 +143,26 @@ class SampleInfo {
 
     }
 
-    getSortedSampleKeysByAttribute(sampleKeys, attribute, sortDirection) {
-
-        sortDirection = sortDirection || 1
-
+    sortSampleKeysByAttribute(sampleKeys, attribute, sortDirection) {
         const numbers = sampleKeys.filter(key => {
-            const value = this.getAttributes(key)[attribute]
+            const attributes = this.getAttributes(key)
+            if (undefined === attributes) {
+                return false
+            }
+            const value = attributes[attribute]
             return typeof value === 'number'
         })
 
         const strings = sampleKeys.filter(key => {
-            const value = this.getAttributes(key)[attribute]
+            const attributes = this.getAttributes(key)
+            if (undefined === attributes) {
+                return false
+            }
+            const value = attributes[attribute]
             return typeof value === 'string'
         })
 
         const compare = (a, b) => {
-
             const aa = this.getAttributes(a)[attribute]
             const bb = this.getAttributes(b)[attribute]
 
@@ -164,24 +173,12 @@ class SampleInfo {
             if (typeof aa === 'number' && typeof bb === 'number') {
                 return sortDirection * (aa - bb)
             }
-
         }
 
         numbers.sort(compare)
         strings.sort(compare)
 
-        return -1 === sortDirection ? [...numbers, ...strings] : [...strings, ...numbers]
-
-    }
-
-    toJSON() {
-        const json = []
-        for (const url of this.sampleInfoFiles) {
-            const raw = {url}
-            const cooked = TrackBase.localFileInspection(raw)
-            json.push(cooked)
-        }
-        return json
+        return sortDirection === -1 ? [...numbers, ...strings] : [...strings, ...numbers]
     }
 
     #processSampleInfoFileAsString(string) {
@@ -394,6 +391,24 @@ class SampleInfo {
         }
 
         return `rgb(${color.join(', ')})`
+    }
+
+    /**
+     * Export the sample information as a JSON object.  This is provided for debugging purposes.
+     */
+    export() {
+        const sampleInfoObject = {}
+        const reverseSampleMappingDictionary = Object.fromEntries(
+            Object.entries(this.sampleMappingDictionary).map(([key, value]) => [value, key])
+        )
+        for (const sampleName of Object.keys(this.sampleDictionary)) {
+            const key = reverseSampleMappingDictionary[sampleName] || sampleName
+            const attributes = this.getAttributes(sampleName)
+            if (attributes) {
+                sampleInfoObject[key] = attributes
+            }
+        }
+        console.log(JSON.stringify(sampleInfoObject, null, 2))
     }
 
 }

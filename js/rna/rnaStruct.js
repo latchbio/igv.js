@@ -1,34 +1,11 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import getDataWrapper from "../feature/dataWrapper.js"
 import TrackBase from "../trackBase.js"
 import IGVGraphics from "../igv-canvas.js"
-import {FeatureCache, igvxhr} from "../../node_modules/igv-utils/src/index.js"
+import {igvxhr} from "../../node_modules/igv-utils/src/index.js"
 import {buildOptions} from "../util/igvUtils.js"
 import TextFeatureSource from "../feature/textFeatureSource.js"
+import ChromAliasManager from "../feature/chromAliasManager.js"
+import FeatureCache from "../feature/featureCache.js"
 
 class RnaStructTrack extends TrackBase {
 
@@ -44,11 +21,11 @@ class RnaStructTrack extends TrackBase {
         super(config, browser)
 
         // Backward compatibility hack, arcOrientation was previously a boolean, now a string
-        if(config.arcOrientation === false) {
+        if (config.arcOrientation === false) {
             this.arcOrientation = "DOWN"
-        } else if(config.arcOrientation === true) {
+        } else if (config.arcOrientation === true) {
             this.arcOrientation = "UP"
-        } else if(config.arcOrientation) {
+        } else if (config.arcOrientation) {
             this.arcOrientation = config.arcOrientation.toUpperCase()
         } else {
             this.arcOrientation = "UP"
@@ -263,16 +240,6 @@ class RNAFeatureSource {
 
             const data = await igvxhr.loadByteArray(this.config.url, options)
 
-            this.featureCache = new FeatureCache(parseBP(data), genome)
-
-            return this.featureCache.queryFeatures(chr, start, end)
-
-        } else {
-            return this.featureCache.queryFeatures(chr, start, end)
-        }
-
-        function parseBP(data) {
-
             if (!data) return null
 
             const dataWrapper = getDataWrapper(data)
@@ -282,6 +249,7 @@ class RNAFeatureSource {
             const colors = []
             const descriptors = []
             const features = []
+            const chrNames = new Set()
 
             while ((line = dataWrapper.nextLine()) !== undefined) {
 
@@ -336,12 +304,22 @@ class RNAFeatureSource {
                         feature.description = descriptors[colorIdx]
                     }
 
+                    chrNames.add(chr)
                     features.push(feature)
                 }
             }
 
-            return features
+            this.chromAliasManager = new ChromAliasManager(chrNames, genome)
+
+            this.featureCache = new FeatureCache(features)
+
         }
+
+        const queryChr = this.chromAliasManager ? await this.chromAliasManager.getAliasName(chr) : chr
+
+        return this.featureCache.queryFeatures(queryChr, start, end)
+
+
     }
 }
 

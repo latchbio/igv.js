@@ -16,6 +16,10 @@
 <h2>ROI - Test getUserDefinedROIs method</h2>
 
 <p>
+To create a region of interest click and drag in the "ruler" area under the ideogram while holding down the "shift" key.
+</p>
+
+<p>
     <button id='roi-clear-button'>Clear All ROI Sets</button>
     <button id='roi-get-button'>Get User-Defined ROIs</button>
 </p>
@@ -40,8 +44,7 @@
                 genome: "hg19",
 
                 tracks:
-                    [
-                    ]
+                    []
             }
 
         const browser = await igv.createBrowser(document.getElementById('myDiv'), browser_config)
@@ -62,7 +65,7 @@
                 const list = document.createElement("ul")
                 div.appendChild(list)
 
-                for (const { chr, start, end } of rois) {
+                for (const {chr, start, end} of rois) {
                     const li = document.createElement('li')
                     li.innerText = `${chr}:${start + 1}-${end}`
                     list.appendChild(li)

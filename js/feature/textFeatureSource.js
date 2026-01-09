@@ -1,4 +1,4 @@
-import {FeatureCache} from "../../node_modules/igv-utils/src/index.js"
+import FeatureCache from "./featureCache.js"
 import FeatureFileReader from "./featureFileReader.js"
 import CustomServiceReader from "./customServiceReader.js"
 import UCSCServiceReader from "./ucscServiceReader.js"
@@ -45,6 +45,7 @@ class TextFeatureSource extends BaseFeatureSource {
         } else if ("htsget" === config.sourceType) {
             this.reader = new HtsgetVariantReader(config, genome)
             this.queryable = true
+            this.supportsWholeGenome = () => false   // htsget sources do not support whole genome view
         } else if (config.sourceType === 'ucscservice') {
             this.reader = new UCSCServiceReader(config.source)
             this.queryable = true
@@ -141,10 +142,10 @@ class TextFeatureSource extends BaseFeatureSource {
             if (!this.wgFeatures) {
                 if (this.supportsWholeGenome()) {
                     if("wig" === this.config.type) {
-                        const allWgFeatures = await computeWGFeatures(this.featureCache.getAllFeatures(), this.genome, 1000000)
+                        const allWgFeatures = await computeWGFeatures(this.featureCache.getAllFeatures(), this.genome, this.chromAliasManager, 1000000)
                         this.wgFeatures = summarizeData(allWgFeatures, 0, bpPerPixel, windowFunction)
                     } else {
-                        this.wgFeatures = await computeWGFeatures(this.featureCache.getAllFeatures(), this.genome, this.maxWGCount)
+                        this.wgFeatures = await computeWGFeatures(this.featureCache.getAllFeatures(), this.genome, this.chromAliasManager, this.maxWGCount)
                     }
                 } else {
                     this.wgFeatures = []
@@ -152,7 +153,8 @@ class TextFeatureSource extends BaseFeatureSource {
             }
             return this.wgFeatures
         } else {
-            return this.featureCache.queryFeatures(chr, start, end)
+            const queryChr = this.chromAliasManager ?  await this.chromAliasManager.getAliasName(chr) : chr
+            return this.featureCache.queryFeatures(queryChr, start, end)
         }
     }
 
@@ -184,11 +186,11 @@ class TextFeatureSource extends BaseFeatureSource {
 
         // chr aliasing
         let queryChr = chr
-        if (!this.chrAliasManager && this.reader && this.reader.sequenceNames) {
-            this.chrAliasManager = new ChromAliasManager(this.reader.sequenceNames, this.genome)
+        if (!this.chromAliasManager && this.reader && this.reader.sequenceNames && this.reader.sequenceNames.size > 0) {
+            this.chromAliasManager = new ChromAliasManager(this.reader.sequenceNames, this.genome)
         }
-        if (this.chrAliasManager) {
-            queryChr = await this.chrAliasManager.getAliasName(chr)
+        if (this.chromAliasManager) {
+            queryChr = await this.chromAliasManager.getAliasName(chr)
         }
 
         // Use visibility window to potentially expand query interval.
@@ -214,7 +216,7 @@ class TextFeatureSource extends BaseFeatureSource {
         }
 
         const genomicInterval = this.queryable ?
-            new GenomicInterval(chr, intervalStart, intervalEnd) :
+            new GenomicInterval(queryChr, intervalStart, intervalEnd) :
             undefined
 
         if (features) {
@@ -226,7 +228,7 @@ class TextFeatureSource extends BaseFeatureSource {
             }
 
             // Note - replacing previous cache with new one.  genomicInterval is optional (might be undefined => includes all features)
-            this.featureCache = new FeatureCache(features, this.genome, genomicInterval)
+            this.featureCache = new FeatureCache(features, genomicInterval)
 
             // If track is marked "searchable"< cache features by name -- use this with caution, memory intensive
             if (this.searchable) {

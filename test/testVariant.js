@@ -216,17 +216,29 @@ suite("testVariant", function () {
             url: "test/data/vcf/svtype_BND.vcf",
             indexed: false
         }
-
         const track = await Browser.prototype.createTrack.call(browser, config)
         assert.equal(track.type, "variant")
-
         const chr = "chr2"
         const start = 321681
         const end = 321682
         const features = await track.getFeatures(chr, start, end)
-
         assert.equal(features.length, 2)
+    })
 
+    test("track chrom alias", async function () {
+
+        const config = {
+            url: "test/data/vcf/svtype_BND.vcf",
+            indexed: false
+        }
+        const browser = {genome: createGenome("ncbi")}
+        const track = await Browser.prototype.createTrack.call(browser, config)
+        assert.equal(track.type, "variant")
+        const chr = "2"
+        const start = 321681
+        const end = 321682
+        const features = await track.getFeatures(chr, start, end)
+        assert.equal(features.length, 2)
     })
 
     test("Packing with insertion", async function () {
@@ -236,7 +248,7 @@ suite("testVariant", function () {
         // chr14	105246530	.	GC	G	.	.	Gene=AKT1;MutationCDS=c.100GC>G;MutationAA=p.B2C
         // chr14	105246530	.	G	C	.	.	Gene=AKT1;MutationCDS=c.100G>C;MutationAA=p.D4E
 
-        const url = "dev/issues/1714/targeted_variants.vcf"
+        const url = "test/data/vcf/targeted_variants.vcf"
 
         // Example from 4.2 spec
         const data = await igvxhr.loadString(url, {})

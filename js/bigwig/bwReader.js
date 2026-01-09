@@ -1,28 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import RPTree from "./rpTree.js"
 import BinaryParser from "../binary.js"
 import {BGZip, igvxhr, StringUtils} from "../../node_modules/igv-utils/src/index.js"
@@ -71,6 +46,14 @@ class BWReader {
     async preload() {
         const data = await igvxhr.loadArrayBuffer(this.path)
         this.loader = new DataBuffer(data)
+        for (let rpTree of this.rpTreeCache.values()) {
+            rpTree.loader = this.loader
+        }
+        if (this._searchTrees) {
+            for (let bpTree of this._searchTrees) {
+                bpTree.loader = this.loader
+            }
+        }
     }
 
     async readWGFeatures(wgChromosomeNames, bpPerPixel, windowFunction) {
@@ -203,7 +186,7 @@ class BWReader {
                 for (let k of Object.keys(aliasRecord)) {
                     if (k === "start" || k === "end") continue
                     alias = aliasRecord[k]
-                    if(alias === chr) continue   // Already tried this
+                    if (alias === chr) continue   // Already tried this
                     chrIdx = await this.chromTree.getIdForName(alias)
                     if (chrIdx !== undefined) {
                         break
@@ -256,7 +239,7 @@ class BWReader {
                     return false
                 })
                 if (matching.length > 0) {
-                    return matching.reduce((l, f) => (l.end - l.start) > (f.end - f.start) ? l : f, features[0])
+                    return matching.reduce((l, f) => (l.end - l.start) > (f.end - f.start) ? l : f, matching[0])
                 } else {
                     return undefined
                 }
@@ -294,7 +277,8 @@ class BWReader {
             this.header.extraIndexOffsets.length > 0) {
             this._searchTrees = []
             for (let offset of this.header.extraIndexOffsets) {
-                const bpTree = await BPTree.loadBpTree(this.path, this.config, offset)
+                const type = undefined
+                const bpTree = await BPTree.loadBpTree(this.path, this.config, offset, type, this.loader)
                 this._searchTrees.push(bpTree)
             }
         }
@@ -413,13 +397,13 @@ class BWReader {
                 this.totalSummary = new BWTotalSummary(extHeaderParser)
             }
 
-            this.chromTree = new ChromTree(this.path, this.config, header.chromTreeOffset)
+            this.chromTree = new ChromTree(this.path, this.config, header.chromTreeOffset, this.loader)
             await this.chromTree.init()
 
             // Estimate feature density from dataCount (bigbed only)
             if ("bigbed" === this.type) {
                 const dataCount = await this.#readDataCount(header.fullDataOffset)
-                this.featureDensity = dataCount / this.chromTree.estimateGenomeSize()
+                this.featureDensity = dataCount / await this.chromTree.estimateGenomeSize()
             }
 
             this.header = header
@@ -500,7 +484,7 @@ class BWReader {
         if (rpTree) {
             return rpTree
         } else {
-            rpTree = new RPTree(this.path, this.config, offset)
+            rpTree = new RPTree(this.path, this.config, offset, this.loader)
             await rpTree.init()
             this.rpTreeCache.set(offset, rpTree)
             return rpTree
@@ -550,7 +534,7 @@ class BWReader {
 class ZoomLevelHeader {
     constructor(index, byteBuffer) {
         this.index = index
-        this.reductionLevel = byteBuffer.getInt()
+        this.reductionLevel = byteBuffer.getUInt()
         this.reserved = byteBuffer.getInt()
         this.dataOffset = byteBuffer.getLong()
         this.indexOffset = byteBuffer.getLong()

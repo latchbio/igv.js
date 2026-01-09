@@ -19,16 +19,16 @@
 
 <script type="module">
 
-    import igv from "../../js/index.js";
-    import {StringUtils} from "../../node_modules/igv-utils/src/index.js";
+    import igv from "../../js/index.js"
+    import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
 
-    const numberFormatter = StringUtils.numberFormatter;
+    const numberFormatter = StringUtils.numberFormatter
 
     let browser;
 
     (async () => {
 
-      const options =
+        const options =
             {
                 genome: "hg19",
                 // locus: [ 'egfr', 'myc' ],
@@ -41,18 +41,16 @@
                             name: 'SEG - Breast',
                             url: 'https://www.dropbox.com/s/lka7ixgin5ne5xl/Breast.seg?dl=0'
                         }
-
                     ]
+            }
 
-            };
-
-        browser = await igv.createBrowser(document.getElementById('igvDiv'), options);
+        browser = await igv.createBrowser(document.getElementById('igvDiv'), options)
 
         browser.setCustomCursorGuideMouseHandler(({bp, interpolant}) => {
-            console.log(`base-pair ${ numberFormatter(bp) } interpolant ${ interpolant.toFixed(3) } `);
-        });
+            console.log(`base-pair ${numberFormatter(bp)} interpolant ${interpolant.toFixed(3)} `)
+        })
 
-    })();
+    })()
 
 </script>
 </html>

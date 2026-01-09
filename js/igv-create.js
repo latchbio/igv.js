@@ -1,31 +1,8 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import {GoogleAuth, igvxhr} from '../node_modules/igv-utils/src/index.js'
 import Browser from "./browser.js"
 import GenomeUtils from "./genome/genomeUtils.js"
+import InputDialog  from "./ui/components/inputDialog.js"
+import createWebSocketClient from "./websocket/websocketClient.js"
 
 let allBrowsers = []
 
@@ -64,6 +41,11 @@ async function createBrowser(parentDiv, config) {
         })
     }
 
+    // A very obscure and undocumented option unlikely to be needed by anyone but us.
+    if(config.formEmbedMode) {
+        InputDialog.FORM_EMBED_MODE = true
+    }
+
     // Create browser
     const browser = new Browser(config, parentDiv)
     allBrowsers.push(browser)
@@ -79,8 +61,13 @@ async function createBrowser(parentDiv, config) {
 
     browser.navbar.navbarDidResize()
 
-    return browser
+    if(config.enableWebSocket) {
+        const host = config.webSocketHost || "localhost"
+        const port = config.webSocketPort || 60141
+        createWebSocketClient(host, port, browser)
+    }
 
+    return browser
 }
 
 function removeBrowser(browser) {
@@ -111,86 +98,16 @@ async function visibilityChange() {
     }
 }
 
-function setDefaults(config) {
-
-    if (undefined === config.minimumBases) {
-        config.minimumBases = 40
+function setDefaults(config, defaults) {
+    if (typeof defaults === "undefined") {
+        defaults = defaultOptions
     }
-
-    if (undefined === config.showIdeogram) {
-        config.showIdeogram = true
+    for (const key of Object.keys(defaults)) {
+        if (config[key] === undefined) {
+            config[key] = defaults[key]
+        }
     }
-
-    if (undefined == config.showCytobandNames) {
-        config.showCytobandNames = false
-    }
-
-    if (undefined === config.showCircularView) {
-        config.showCircularView = false
-    }
-
-    if (undefined === config.showCircularViewButton) {
-        config.showCircularViewButton = false
-    }
-
-    if (undefined === config.showTrackLabelButton) {
-        config.showTrackLabelButton = true
-    }
-
-    if (undefined === config.showTrackLabels) {
-        config.showTrackLabels = true
-    }
-
-    if (undefined === config.showCursorTrackingGuideButton) {
-        config.showCursorTrackingGuideButton = true
-    }
-
-    if (undefined === config.showCursorGuide) {
-        config.showCursorGuide = config.showCursorTrackingGuide || false   // showCursorTrackingGuide is a synonym
-    }
-
-    if (undefined === config.showCenterGuideButton) {
-        config.showCenterGuideButton = true
-    }
-
-    if (undefined === config.showCenterGuide) {
-        config.showCenterGuide = false
-    }
-
-    if (undefined === config.showSampleNames) {
-        config.showSampleNames = false
-    }
-
-    if (undefined === config.showSVGButton) {
-        config.showSVGButton = true
-    }
-
-    if (config.showControls === undefined) {
-        config.showControls = true
-    }
-
-    if (config.showNavigation === undefined) {
-        config.showNavigation = true
-    }
-
-    if (config.showRuler === undefined) {
-        config.showRuler = true
-    }
-
-    if (config.flanking === undefined) {
-        config.flanking = 1000
-    }
-
-    if (config.pairsSupported === undefined) {
-        config.pairsSupported = true
-    }
-
-    if (!config.tracks) {
-        config.tracks = []
-    }
-
     return config
-
 }
 
 
@@ -281,5 +198,28 @@ function extractQuery(config) {
 async function createTrack(config, browser) {
     return await Browser.prototype.createTrack.call(browser, config)
 }
+
+const defaultOptions = {
+    minimumBases: 40,
+    showIdeogram: true,
+    showCytobandNames: false,
+    showCircularView: false,
+    showCircularViewButton: false,
+    showTrackLabelButton: true,
+    showTrackLabels: true,
+    showCursorTrackingGuideButton: true,
+    showCursorGuide: false,   // showCursorTrackingGuide is a synonym
+    showCenterGuideButton: true,
+    showCenterGuide: false,
+    showSampleNames: false,
+    showSVGButton: true,
+    showControls: true,
+    showNavigation: true,
+    showRuler: true,
+    flanking: 1000,
+    pairsSupported: true,
+    tracks: []
+}
+
 
 export {createTrack, createBrowser, removeBrowser, removeAllBrowsers, getAllBrowsers, visibilityChange, setDefaults}

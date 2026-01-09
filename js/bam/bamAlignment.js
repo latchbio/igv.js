@@ -1,8 +1,9 @@
-
 import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
 import {createSupplementaryAlignments} from "./supplementaryAlignment.js"
-import {byteToUnsignedInt, getBaseModificationSets, modificationName} from "./mods/baseModificationUtils.js"
+import {byteToUnsignedInt, getBaseModificationSets} from "./mods/baseModificationUtils.js"
 import orientationTypes from "./orientationTypes.js"
+import {HGVS} from "../genome/hgvs.js"
+import {ClinVar} from "../genome/clinVar.js"
 
 
 const READ_PAIRED_FLAG = 0x1
@@ -91,7 +92,7 @@ class BamAlignment {
     isNegativeStrand() {
         return (this.flags & READ_STRAND_FLAG) !== 0
     }
-    
+
     isMateNegativeStrand() {
         return (this.flags & MATE_STRAND_FLAG) !== 0
     }
@@ -139,13 +140,22 @@ class BamAlignment {
         return (genomicLocation >= s && genomicLocation <= (s + l))
     }
 
-    popupData(genomicLocation) {
+    /**
+     * Return data to show in the popup.  Elements are either strings (for raw HTML) or
+     * objects with name, value, borderTop properties.
+     *
+     * @param genomicLocation - 0-based genomic location
+     * @param hiddenTags - Set of bam tags to hide
+     * @param showTags - Set of bam tags to show (overrides hide/show rules)
+     * @returns {*[]}
+     */
+    async popupData(genomicLocation, hiddenTags, showTags, refBase, genome) {
 
         // if the user clicks on a base next to an insertion, show just the
         // inserted bases in a popup (like in desktop IGV).
         const nameValues = []
 
-        // Consert genomic location to int
+        // Convert genomic location to int
         genomicLocation = Math.floor(genomicLocation)
 
         if (this.insertions) {
@@ -163,6 +173,26 @@ class BamAlignment {
         }
 
         nameValues.push({name: 'Read Name', value: this.readName})
+
+
+        // HGVS annotations for variants, and ClinVar links if available
+        const readBase = this.readBaseAt(genomicLocation)
+        if (refBase) {
+            if (readBase && readBase !== refBase && readBase !== '*') {
+                const hgvsNotation = await HGVS.createHGVSAnnotation(genome, this.chr, genomicLocation, refBase, readBase)
+                if (hgvsNotation) {
+                    const clinVarURL = await ClinVar.getClinVarURL(hgvsNotation)
+                    if (clinVarURL) {
+                        nameValues.push({
+                            name: 'ClinVar',
+                            value: `<a href='${clinVarURL}' target='_blank'>${hgvsNotation}</a>`
+                        })
+                    } else {
+                        nameValues.push({name: 'HGVS', value: hgvsNotation})
+                    }
+                }
+            }
+        }
 
         // Sample
         // Read group
@@ -222,34 +252,39 @@ class BamAlignment {
             }
         }
 
-        const hiddenTags = new Set(['SA', 'MD'])
         nameValues.push('<hr/>')
         for (let key in tagDict) {
-            if (!hiddenTags.has(key)) {
+            if (showTags?.has(key)) {
+                nameValues.push({name: key, value: tagDict[key]})
+            } else if (showTags) {
+                hiddenTags.add(key)
+            } else if (!hiddenTags.has(key)) {
                 nameValues.push({name: key, value: tagDict[key]})
             }
         }
 
-        nameValues.push({name: 'Hidden Tags', value: 'SA, MD'})
+        if (hiddenTags && hiddenTags.size > 0) {
+            nameValues.push({name: 'Hidden Tags', value: Array.from(hiddenTags).join(", ")})
+        }
 
         nameValues.push('<hr/>')
         nameValues.push({name: 'Genomic Location: ', value: StringUtils.numberFormatter(1 + genomicLocation)})
-        nameValues.push({name: 'Read Base:', value: this.readBaseAt(genomicLocation)})
+        nameValues.push({name: 'Read Base:', value: readBase})
         nameValues.push({name: 'Base Quality:', value: this.readBaseQualityAt(genomicLocation)})
 
         const bmSets = this.getBaseModificationSets()
-        if(bmSets) {
+        if (bmSets) {
             const i = this.positionToReadIndex(genomicLocation)
-            if(undefined !== i) {
+            if (undefined !== i) {
                 let found = false
                 for (let bmSet of bmSets) {
                     if (bmSet.containsPosition(i)) {
-                        if(!found) {
+                        if (!found) {
                             nameValues.push('<hr/>')
                             nameValues.push('<b>Base modifications:</b>')
                             found = true
                         }
-                        const lh = Math.round((100/255) * byteToUnsignedInt(bmSet.likelihoods.get(i)))
+                        const lh = Math.round((100 / 255) * byteToUnsignedInt(bmSet.likelihoods.get(i)))
                         nameValues.push(`${bmSet.fullName()} @ likelihood =  ${lh}%`)
                     }
                 }
@@ -352,7 +387,7 @@ class BamAlignment {
         return this.baseModificationSets
     }
 
-     getGroupValue( groupBy, tag, expectedPairOrientation) {
+    getGroupValue(groupBy, tag, expectedPairOrientation) {
 
         const al = this
         switch (groupBy) {
@@ -389,7 +424,7 @@ class BamAlignment {
         }
     }
 
-    positionToReadIndex( position) {
+    positionToReadIndex(position) {
         const block = blockAtGenomicLocation(this.blocks, position)
         if (block) {
             return (position - block.start) + block.seqOffset

@@ -1,33 +1,9 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2016-2017 The Regents of the University of California
- * Author: Jim Robinson
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import AlignmentContainer from "./alignmentContainer.js"
 import BamUtils from "./bamUtils.js"
-import {BGZip, FeatureCache, igvxhr} from "../../node_modules/igv-utils/src/index.js"
+import {BGZip, igvxhr} from "../../node_modules/igv-utils/src/index.js"
 import {buildOptions, isDataURL} from "../util/igvUtils.js"
+import ChromAliasManager from "../feature/chromAliasManager.js"
+import FeatureCache from "../feature/featureCache.js"
 
 /**
  * Class for reading a bam file
@@ -47,6 +23,10 @@ class BamReaderNonIndexed {
         BamUtils.setReaderDefaults(this, config)
     }
 
+    async postInit() {
+        await this.#loadAll()
+    }
+
     /**
      *
      * @param chr
@@ -58,18 +38,10 @@ class BamReaderNonIndexed {
 
         if (!this.alignmentCache) {
             // For a non-indexed BAM file all alignments are read at once and cached.
-            let unc
-            if (this.isDataUri) {
-                const data = decodeDataURI(this.bamPath)
-                unc = BGZip.unbgzf(data.buffer)
-            } else {
-                const arrayBuffer = await igvxhr.loadArrayBuffer(this.bamPath, buildOptions(this.config))
-                unc = BGZip.unbgzf(arrayBuffer)
-            }
-            this.alignmentCache = this.#parseAlignments(unc)
+            await this.#loadAll()
         }
 
-        const queryChr = await this.#getQueryChr(chr)
+        const queryChr = this.chromAliasManager ? await this.chromAliasManager.getAliasName(chr) : chr
         const qAlignments = this.alignmentCache.queryFeatures(queryChr, bpStart, bpEnd)
         const alignmentContainer = new AlignmentContainer(chr, bpStart, bpEnd, this.config)
         for (let a of qAlignments) {
@@ -79,11 +51,25 @@ class BamReaderNonIndexed {
         return alignmentContainer
     }
 
+    async #loadAll() {
+        let unc
+        if (this.isDataUri) {
+            const data = decodeDataURI(this.bamPath)
+            unc = BGZip.unbgzf(data.buffer)
+        } else {
+            const arrayBuffer = await igvxhr.loadArrayBuffer(this.bamPath, buildOptions(this.config))
+            unc = BGZip.unbgzf(arrayBuffer)
+        }
+        const alignments = this.#parseAlignments(unc)
+        this.alignmentCache = new FeatureCache(alignments)
+    }
+
     #parseAlignments(data) {
         const alignments = []
         this.header = BamUtils.decodeBamHeader(data)
+        this.chromAliasManager = this.genome ? new ChromAliasManager(this.header.chrNames, this.genome) : null
         BamUtils.decodeBamRecords(data, this.header.size, alignments, this.header.chrNames, undefined, 0, Number.MAX_SAFE_INTEGER, this.filter)
-        return new FeatureCache(alignments, this.genome)
+        return alignments
     }
 
     async #getQueryChr(chr) {

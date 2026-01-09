@@ -1,31 +1,7 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014-2015 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
-import {FeatureCache} from "../../node_modules/igv-utils/src/index.js"
+import FeatureCache from "./featureCache.js"
 import {computeWGFeatures, findFeatureAfterCenter, packFeatures} from "./featureUtils.js"
 import BaseFeatureSource from "./baseFeatureSource.js"
+import ChromAliasManager from "./chromAliasManager.js"
 
 /**
  * feature source for features supplied directly, as opposed to reading and parsing from a file or webservice
@@ -51,7 +27,10 @@ class StaticFeatureSource extends BaseFeatureSource {
         if (this.config.mappings) {
             mapProperties(features, this.config.mappings)
         }
-        this.featureCache = new FeatureCache(features, this.genome)
+
+        this.chromAliasManager = this.genome ? new ChromAliasManager(features.map(f => f.chr), this.genome) : null
+
+        this.featureCache = new FeatureCache(features)
 
         if (this.searchable || this.config.searchableFields) {
             this.addFeaturesToDB(features, this.config)
@@ -72,8 +51,7 @@ class StaticFeatureSource extends BaseFeatureSource {
      */
     async getFeatures({chr, start, end, bpPerPixel, visibilityWindow}) {
 
-        const genome = this.genome
-        const queryChr = genome ? genome.getChromosomeName(chr) : chr
+        const queryChr = this.chromAliasManager ? await this.chromAliasManager.getAliasName(chr) : chr
         const isWholeGenome = ("all" === queryChr.toLowerCase())
 
         // Various conditions that can require a feature load
@@ -81,7 +59,7 @@ class StaticFeatureSource extends BaseFeatureSource {
         //   * cache is disabled
         //   * cache does not contain requested range
         if (isWholeGenome) {
-            return computeWGFeatures(this.featureCache.getAllFeatures(), this.genome, this.maxWGCount)
+            return await computeWGFeatures(this.featureCache.getAllFeatures(), this.genome, this.chromAliasManager, this.maxWGCount)
         } else {
             return this.featureCache.queryFeatures(queryChr, start, end)
         }
