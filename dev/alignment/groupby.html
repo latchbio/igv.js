@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>BAM Group By Label Rethink</title>
+</head>
+
+<body>
+
+<div id="igvDiv" style="padding-top: 10px;padding-bottom: 10px; border:1px solid lightgray"></div>
+
+<script type="module">
+
+    import igv from "../../js/index.js"
+
+    document.addEventListener("DOMContentLoaded", async () => {
+
+        const config =
+            {
+                "genome": "hg19",
+                "locus": "chr8:128,747,477-128,756,197",
+                "tracks": [
+                    {
+                        "type": "alignment",
+                        "url": "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/illumina_platinum_pedigree/data/CEU/NA12878/alignment/NA12878.alt_bwamem_GRCh38DH.20150706.CEU.illumina_platinum_ped.cram",
+                        "indexURL": "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/illumina_platinum_pedigree/data/CEU/NA12878/alignment/NA12878.alt_bwamem_GRCh38DH.20150706.CEU.illumina_platinum_ped.cram.crai",
+                        "name": "NA12878",
+                        "groupBy": "strand"
+                    }
+                ]
+            }
+
+        const browser = await igv.createBrowser(igvDiv, config)
+
+    })
+
+</script>
+
+</body>
+
+</html>

@@ -2,7 +2,7 @@ import "./utils/mockObjects.js"
 import FeatureSource from "../js/feature/featureSource.js"
 import {assert} from 'chai'
 import {createGenome} from "./utils/MockGenome.js"
-import {summarizeData} from "../js/feature/wigTrack.js"
+import {summarizeData} from "../js/feature/wigSummary.js"
 
 const genome = createGenome()
 
@@ -60,7 +60,7 @@ suite("testWig", function () {
      */
     test("wig query", async function () {
 
-        const url = "test/data/wig/ENCFF000ARZ.wig"
+        const url = "https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/wig/ENCFF000ARZ.wig"
 
         const wigFeatureSource = FeatureSource({format: 'wig', url: url}, genome)
 
@@ -77,7 +77,7 @@ suite("testWig", function () {
 
     test("wig summarize", async function () {
 
-        const url = "test/data/wig/ENCFF000ARZ.wig"
+        const url = "https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/wig/ENCFF000ARZ.wig"
 
         const wigFeatureSource = FeatureSource({format: 'wig', url: url}, genome)
 

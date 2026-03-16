@@ -33,7 +33,7 @@ import SampleInfo from "./sample/sampleInfo.js"
 import {translateSession} from "./hic/shoeboxUtils.js"
 import MenuUtils from "./ui/menuUtils.js"
 import Genome from "./genome/genome.js"
-import {setDefaults} from "./igv-create.js"
+import {setDefaults} from "./util/defaultOptions.js"
 import {trackViewportPopoverList} from './trackViewport.js'
 import TrackBase from "./trackBase.js"
 import {loadGenbank} from "./gbk/genbankParser.js"
@@ -45,7 +45,7 @@ import {convertToHubURL} from "./ucsc/ucscUtils.js"
 import CursorGuide from "./ui/cursorGuide.js"
 import SliderDialog from "./ui/components/sliderDialog.js"
 import {createBlatTrack} from "./blat/blatTrack.js"
-import {loadHub} from "./ucsc/hub/hubParser.js"
+import {loadHub} from "./ucsc/hub/hub.js"
 import {EventEmitter} from "./events.js"
 import Locus from "./locus.js"
 import {isLocalFile, isGoogleDriveURL} from "./util/sessionResourceValidator.js"
@@ -132,8 +132,6 @@ class Browser {
 
                 // sample names
                 this.sampleNameViewportWidth = undefined
-                this.showSampleNames = false
-                this.sampleNameControl.setState(this.showSampleNames)
                 this.sampleNameControl.hide()
 
                 this.layoutChange()

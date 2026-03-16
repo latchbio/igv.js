@@ -18,19 +18,19 @@ Below are examples and a quickstart guide.  See the [developer documentation](ht
 
 # Examples
  
-***[Alignments](https://igv.org/web/release/3.7.3/examples/cram-vcf.html)***
+***[Alignments](https://igv.org/web/release/3.8.0/examples/cram-vcf.html)***
 
-***[Interactions](https://igv.org/web/release/3.7.3/examples/interact.html)***
+***[Interactions](https://igv.org/web/release/3.8.0/examples/interact.html)***
 
-***[Copy number](https://igv.org/web/release/3.7.3/examples/copyNumber.html)***
+***[Copy number](https://igv.org/web/release/3.8.0/examples/copyNumber.html)***
 
-***[Multiple regions](https://igv.org/web/release/3.7.3/examples/multi-locus.html)***
+***[Multiple regions](https://igv.org/web/release/3.8.0/examples/multi-locus.html)***
 
-***[Mutation Annotation Format (MAF)](https://igv.org/web/release/3.7.3/examples/maf-tcga.html)***
+***[Mutation Annotation Format (MAF)](https://igv.org/web/release/3.8.0/examples/maf-tcga.html)***
 
-***[Variant color options](https://igv.org/web/release/3.7.3/examples/variant-colors.html)***
+***[Variant color options](https://igv.org/web/release/3.8.0/examples/variant-colors.html)***
 
-***[More](https://igv.org/web/release/3.7.3/examples/)***
+***[More](https://igv.org/web/release/3.8.0/examples/)***
 
  
 # Quickstart
@@ -39,18 +39,18 @@ Below are examples and a quickstart guide.  See the [developer documentation](ht
 igv.js consists of a single javascript file with no external dependencies.  
 
 Pre-built files for script include, AMD, or CJS module systems (igv.min.js) and an ES6 module (igv.esm.min.js)
-can be downloaded from [https://cdn.jsdelivr.net/npm/igv@3.7.3/dist/](https://cdn.jsdelivr.net/npm/igv@3.7.3/dist/). 
+can be downloaded from [https://cdn.jsdelivr.net/npm/igv@3.8.0/dist/](https://cdn.jsdelivr.net/npm/igv@3.8.0/dist/). 
 
 To import igv as an ES6 module
 
 ```javascript
-import igv from "https://cdn.jsdelivr.net/npm/igv@3.7.3/dist/igv.esm.min.js"
+import igv from "https://cdn.jsdelivr.net/npm/igv@3.8.0/dist/igv.esm.min.js"
 ``` 
 
 Or as a script include (defines the "igv" global)
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/igv@3.7.3/dist/igv.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/igv@3.8.0/dist/igv.min.js"></script>
 ```   
  
 Alternatively you can install with npm  
@@ -131,7 +131,6 @@ This creates a dist folder with the following files
 Additionally the file ```embedCSS.js``` is created in the ```js``` folder.  This contains the CSS required for igv.js,
 which is injected into a shadow root containing igv.js.
 
-
 ### Tests
 
 To run the tests from the command line
@@ -139,20 +138,6 @@ To run the tests from the command line
 ```
 npm run test
 ```
-
-
-### Examples
-
-To run the examples install [http-server](https://www.npmjs.com/package/http-server).
-
-Start  http-server from the project root directory
-
-```bash
-npx http-server 
-```
-
-Then open [http://localhost:8080/examples](http://localhost:8080/examples) in a web browser.
-
 
 # Supported Browsers
 

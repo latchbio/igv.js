@@ -1,7 +1,8 @@
 import "./utils/mockObjects.js"
 import {assert} from 'chai'
 import {convertToHubURL} from "../js/ucsc/ucscUtils.js"
-import {loadStanzas, loadHub} from "../js/ucsc/hub/hubParser.js"
+import {loadStanzas} from "../js/ucsc/hub/hubParser.js"
+import {loadHub} from "../js/ucsc/hub/hub.js"
 import TrackDbHub from "../js/ucsc/hub/trackDbHub.js"
 import {parseMetadata} from "../js/ucsc/hub/trackDbHub.js"
 
@@ -9,7 +10,7 @@ suite("hub.txt", function () {
 
     test("get genome configs", async function () {
 
-        const hubFile = "test/data/hubs/hub.txt"
+        const hubFile = "https://raw.githubusercontent.com/igvteam/igv-data/refs/heads/main/data/test/hubs/hub.txt"
         const hub = await loadHub(hubFile)
         assert.ok(hub.hubStanza)
         // assert.ok(hub.genomeStanza);
